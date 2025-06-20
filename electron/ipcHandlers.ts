@@ -427,4 +427,101 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   process.on('exit', cleanup);
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
+
+  // Resume and Interview Mode handlers
+  ipcMain.handle("upload-resume", async (event, resumeText: string) => {
+    try {
+      configHelper.setResumeData(resumeText);
+      return { success: true, message: "Resume uploaded successfully" };
+    } catch (error) {
+      console.error("Error uploading resume:", error);
+      return { success: false, error: "Failed to upload resume" };
+    }
+  })
+
+  ipcMain.handle("get-resume-data", () => {
+    try {
+      return { success: true, data: configHelper.getResumeData() };
+    } catch (error) {
+      console.error("Error getting resume data:", error);
+      return { success: false, error: "Failed to get resume data" };
+    }
+  })
+
+  ipcMain.handle("set-interview-mode", (event, enabled: boolean) => {
+    try {
+      configHelper.setInterviewMode(enabled);
+      return { success: true };
+    } catch (error) {
+      console.error("Error setting interview mode:", error);
+      return { success: false, error: "Failed to set interview mode" };
+    }
+  })
+
+  ipcMain.handle("get-interview-mode", () => {
+    try {
+      return { success: true, enabled: configHelper.getInterviewMode() };
+    } catch (error) {
+      console.error("Error getting interview mode:", error);
+      return { success: false, error: "Failed to get interview mode" };
+    }
+  })
+
+  ipcMain.handle("add-conversation-message", (event, role: string, content: string) => {
+    try {
+      configHelper.addToConversationHistory(role, content);
+      return { success: true };
+    } catch (error) {
+      console.error("Error adding conversation message:", error);
+      return { success: false, error: "Failed to add message" };
+    }
+  })
+
+  ipcMain.handle("get-conversation-history", () => {
+    try {
+      return { success: true, history: configHelper.getConversationHistory() };
+    } catch (error) {
+      console.error("Error getting conversation history:", error);
+      return { success: false, error: "Failed to get conversation history" };
+    }
+  })
+
+  ipcMain.handle("clear-conversation-history", () => {
+    try {
+      configHelper.clearConversationHistory();
+      return { success: true };
+    } catch (error) {
+      console.error("Error clearing conversation history:", error);
+      return { success: false, error: "Failed to clear conversation history" };
+    }
+  })
+
+  ipcMain.handle("process-interview-question", async (event, question: string) => {
+    try {
+      if (!deps.processingHelper) {
+        return { success: false, error: "Processing helper not available" };
+      }
+
+      const resumeData = configHelper.getResumeData();
+      if (!resumeData) {
+        return { success: false, error: "No resume data available. Please upload your resume first." };
+      }
+
+      // Add the question to conversation history
+      configHelper.addToConversationHistory("user", question);
+
+      // Process the question with resume context
+      const result = await deps.processingHelper.processInterviewQuestion(question, resumeData);
+      
+      if (result.success) {
+        // Add the response to conversation history
+        configHelper.addToConversationHistory("assistant", result.data);
+      }
+
+      return result;
+    } catch (error) {
+      console.error("Error processing interview question:", error);
+      return { success: false, error: "Failed to process interview question" };
+    }
+  })
 }

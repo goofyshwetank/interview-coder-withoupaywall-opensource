@@ -11,6 +11,7 @@ interface QueueCommandsProps {
   credits: number
   currentLanguage: string
   setLanguage: (language: string) => void
+  onOpenInterviewMode?: () => void
 }
 
 const QueueCommands: React.FC<QueueCommandsProps> = ({
@@ -18,7 +19,8 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   screenshotCount = 0,
   credits,
   currentLanguage,
-  setLanguage
+  setLanguage,
+  onOpenInterviewMode
 }) => {
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
   const tooltipRef = useRef<HTMLDivElement>(null)
@@ -196,6 +198,26 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
 
           {/* Separator */}
           <div className="mx-2 h-4 w-px bg-white/20" />
+
+          {/* Interview Mode */}
+          {onOpenInterviewMode && (
+            <div
+              className="flex items-center gap-2 cursor-pointer rounded px-2 py-1.5 hover:bg-white/10 transition-colors"
+              onClick={onOpenInterviewMode}
+            >
+              <span className="text-[11px] leading-none truncate">
+                Interview Mode
+              </span>
+              <div className="flex gap-1">
+                <button className="bg-white/10 rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
+                  {COMMAND_KEY}
+                </button>
+                <button className="bg-white/10 rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
+                  I
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Settings with Tooltip */}
           <div

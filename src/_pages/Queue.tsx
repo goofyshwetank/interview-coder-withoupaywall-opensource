@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo } from "react"
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import { useQuery } from "@tanstack/react-query"
 import ScreenshotQueue from "../components/Queue/ScreenshotQueue"
 import QueueCommands from "../components/Queue/QueueCommands"
+import InterviewMode from "../components/InterviewMode/InterviewMode"
 
 import { useToast } from "../contexts/toast"
 import { Screenshot } from "../types/screenshots"
@@ -33,8 +34,9 @@ const Queue: React.FC<QueueProps> = ({
 
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
   const [tooltipHeight, setTooltipHeight] = useState(0)
-  const [clickThroughEnabled, setClickThroughEnabled] = useState(false)
+  const [showInterviewMode, setShowInterviewMode] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
+  const [clickThroughEnabled, setClickThroughEnabled] = useState(false)
 
   const {
     data: screenshots = [],
@@ -96,9 +98,7 @@ const Queue: React.FC<QueueProps> = ({
       window.electronAPI.onResetView(() => refetch()),
       window.electronAPI.onDeleteLastScreenshot(async () => {
         if (screenshots.length > 0) {
-          const lastScreenshot = screenshots[screenshots.length - 1];
           await handleDeleteScreenshot(screenshots.length - 1);
-          // Toast removed as requested
         } else {
           showToast("No Screenshots", "There are no screenshots to delete", "neutral");
         }
@@ -122,6 +122,10 @@ const Queue: React.FC<QueueProps> = ({
       // Click-through status listener
       window.electronAPI.onClickThroughChanged((enabled: boolean) => {
         setClickThroughEnabled(enabled)
+      }),
+      // Interview mode shortcut listener
+      window.electronAPI.onOpenInterviewMode(() => {
+        setShowInterviewMode(true);
       }),
       // Removed out of credits handler - unlimited credits in this version
     ]
@@ -148,6 +152,10 @@ const Queue: React.FC<QueueProps> = ({
 
   const handleOpenSettings = () => {
     window.electronAPI.openSettingsPortal();
+  };
+
+  const handleOpenInterviewMode = () => {
+    setShowInterviewMode(true);
   };
   
   // Memoize the click-through indicator to prevent constant re-rendering
@@ -196,9 +204,14 @@ const Queue: React.FC<QueueProps> = ({
             credits={credits}
             currentLanguage={currentLanguage}
             setLanguage={setLanguage}
+            onOpenInterviewMode={handleOpenInterviewMode}
           />
         </div>
       </div>
+
+      {showInterviewMode && (
+        <InterviewMode onClose={() => setShowInterviewMode(false)} />
+      )}
     </div>
   )
 }

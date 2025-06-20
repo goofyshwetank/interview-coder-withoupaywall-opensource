@@ -173,6 +173,15 @@ export class ShortcutsHelper {
       }
     })
     
+    // Interview mode shortcut
+    globalShortcut.register("CommandOrControl+I", () => {
+      console.log("Command/Ctrl + I pressed. Opening interview mode.")
+      const mainWindow = this.deps.getMainWindow()
+      if (mainWindow) {
+        mainWindow.webContents.send("open-interview-mode")
+      }
+    })
+    
     // Unregister shortcuts when quitting
     app.on("will-quit", () => {
       globalShortcut.unregisterAll()

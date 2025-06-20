@@ -14,6 +14,9 @@ interface Config {
   language: string;
   opacity: number;
   clickThrough: boolean;  // Added click-through functionality
+  resumeData: string;  // Store resume content
+  interviewMode: boolean;  // Enable interview mode
+  conversationHistory: Array<{role: string, content: string, timestamp: number}>;  // Store conversation history
 }
 
 export class ConfigHelper extends EventEmitter {
@@ -26,7 +29,10 @@ export class ConfigHelper extends EventEmitter {
     debuggingModel: "gemini-2.5-pro-preview-06-05",
     language: "python",
     opacity: 1.0,
-    clickThrough: true  // Default to true to enable click-through by default
+    clickThrough: true,  // Default to true to enable click-through by default
+    resumeData: "",
+    interviewMode: false,
+    conversationHistory: []
   };
 
   constructor() {
@@ -437,6 +443,67 @@ export class ConfigHelper extends EventEmitter {
       
       return { valid: false, error: errorMessage };
     }
+  }
+
+  /**
+   * Get the resume data
+   */
+  public getResumeData(): string {
+    const config = this.loadConfig();
+    return config.resumeData || "";
+  }
+
+  /**
+   * Set the resume data
+   */
+  public setResumeData(resumeData: string): void {
+    this.updateConfig({ resumeData });
+  }
+  
+  /**
+   * Get the interview mode setting
+   */
+  public getInterviewMode(): boolean {
+    const config = this.loadConfig();
+    return config.interviewMode || false;
+  }
+
+  /**
+   * Set the interview mode setting
+   */
+  public setInterviewMode(interviewMode: boolean): void {
+    this.updateConfig({ interviewMode });
+  }
+  
+  /**
+   * Get the conversation history
+   */
+  public getConversationHistory(): Array<{role: string, content: string, timestamp: number}> {
+    const config = this.loadConfig();
+    return config.conversationHistory || [];
+  }
+
+  /**
+   * Add a message to conversation history
+   */
+  public addToConversationHistory(role: string, content: string): void {
+    const currentHistory = this.getConversationHistory();
+    const newMessage = {
+      role,
+      content,
+      timestamp: Date.now()
+    };
+    
+    // Keep only last 50 messages to prevent config file from getting too large
+    const updatedHistory = [...currentHistory, newMessage].slice(-50);
+    this.updateConfig({ conversationHistory: updatedHistory });
+  }
+
+  /**
+   * Clear conversation history
+   */
+  public clearConversationHistory(): void {
+    this.updateConfig({ conversationHistory: [] });
   }
 }
 

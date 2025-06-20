@@ -201,6 +201,13 @@ const electronAPI = {
       ipcRenderer.removeListener("credits-updated", subscription)
     }
   },
+  onOpenInterviewMode: (callback: () => void) => {
+    const subscription = () => callback()
+    ipcRenderer.on("open-interview-mode", subscription)
+    return () => {
+      ipcRenderer.removeListener("open-interview-mode", subscription)
+    }
+  },
   getPlatform: () => process.platform,
   
   // New methods for OpenAI API integration
@@ -248,7 +255,16 @@ const electronAPI = {
     return () => {
       ipcRenderer.removeListener("click-through-changed", subscription)
     }
-  }
+  },
+  // Resume and Interview Mode API
+  uploadResume: (resumeText: string) => ipcRenderer.invoke("upload-resume", resumeText),
+  getResumeData: () => ipcRenderer.invoke("get-resume-data"),
+  setInterviewMode: (enabled: boolean) => ipcRenderer.invoke("set-interview-mode", enabled),
+  getInterviewMode: () => ipcRenderer.invoke("get-interview-mode"),
+  addConversationMessage: (role: string, content: string) => ipcRenderer.invoke("add-conversation-message", role, content),
+  getConversationHistory: () => ipcRenderer.invoke("get-conversation-history"),
+  clearConversationHistory: () => ipcRenderer.invoke("clear-conversation-history"),
+  processInterviewQuestion: (question: string) => ipcRenderer.invoke("process-interview-question", question),
 }
 
 // Before exposing the API

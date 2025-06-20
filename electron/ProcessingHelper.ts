@@ -1314,4 +1314,367 @@ If you include code examples, use proper markdown code blocks with language spec
       mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS)
     }
   }
+
+  public async processScreenshotsDirectMode(): Promise<void> {
+    const mainWindow = this.deps.getMainWindow()
+    if (!mainWindow) return
+
+    const config = configHelper.loadConfig();
+    
+    // Check if Gemini is configured
+    if (config.apiProvider !== "gemini" || !this.geminiApiKey) {
+      mainWindow.webContents.send(
+        this.deps.PROCESSING_EVENTS.API_KEY_INVALID,
+        "Direct mode requires Gemini API. Please configure Gemini in settings."
+      );
+      return;
+    }
+
+    const view = this.deps.getView()
+    console.log("Processing screenshots in direct mode, view:", view)
+
+    if (view === "queue") {
+      mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.INITIAL_START)
+      const screenshotQueue = this.screenshotHelper.getScreenshotQueue()
+      console.log("Processing main queue screenshots in direct mode:", screenshotQueue)
+      
+      // Check if the queue is empty
+      if (!screenshotQueue || screenshotQueue.length === 0) {
+        console.log("No screenshots found in queue");
+        mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
+        return;
+      }
+
+      // Check that files actually exist
+      const existingScreenshots = screenshotQueue.filter(path => fs.existsSync(path));
+      if (existingScreenshots.length === 0) {
+        console.log("Screenshot files don't exist on disk");
+        mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
+        return;
+      }
+
+      try {
+        // Initialize AbortController
+        this.currentProcessingAbortController = new AbortController()
+        const { signal } = this.currentProcessingAbortController
+
+        const screenshots = await Promise.all(
+          existingScreenshots.map(async (path) => {
+            try {
+              return {
+                path,
+                preview: await this.screenshotHelper.getImagePreview(path),
+                data: fs.readFileSync(path).toString('base64')
+              };
+            } catch (err) {
+              console.error(`Error reading screenshot ${path}:`, err);
+              return null;
+            }
+          })
+        )
+
+        // Filter out any nulls from failed screenshots
+        const validScreenshots = screenshots.filter(Boolean);
+        
+        if (validScreenshots.length === 0) {
+          throw new Error("Failed to load screenshot data");
+        }
+
+        const result = await this.processScreenshotsDirectModeHelper(validScreenshots, signal)
+
+        if (!result.success) {
+          console.log("Direct mode processing failed:", result.error)
+          mainWindow.webContents.send(
+            this.deps.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
+            result.error
+          )
+          // Reset view back to queue on error
+          console.log("Resetting view to queue due to error")
+          this.deps.setView("queue")
+          return
+        }
+
+        // Only set view to solutions if processing succeeded
+        console.log("Setting view to solutions after successful direct mode processing")
+        mainWindow.webContents.send(
+          this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
+          result.data
+        )
+        this.deps.setView("solutions")
+      } catch (error: any) {
+        mainWindow.webContents.send(
+          this.deps.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
+          error
+        )
+        console.error("Direct mode processing error:", error)
+        if (axios.isCancel(error)) {
+          mainWindow.webContents.send(
+            this.deps.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
+            "Processing was canceled by the user."
+          )
+        } else {
+          mainWindow.webContents.send(
+            this.deps.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
+            error.message || "Server error. Please try again."
+          )
+        }
+        // Reset view back to queue on error
+        console.log("Resetting view to queue due to error")
+        this.deps.setView("queue")
+      } finally {
+        this.currentProcessingAbortController = null
+      }
+    } else {
+      // view == 'solutions' - handle extra screenshots in direct mode
+      const extraScreenshotQueue = this.screenshotHelper.getExtraScreenshotQueue()
+      console.log("Processing extra queue screenshots in direct mode:", extraScreenshotQueue)
+      
+      // Check if the extra queue is empty
+      if (!extraScreenshotQueue || extraScreenshotQueue.length === 0) {
+        console.log("No extra screenshots found in queue");
+        mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
+        return;
+      }
+
+      // Check that files actually exist
+      const existingExtraScreenshots = extraScreenshotQueue.filter(path => fs.existsSync(path));
+      if (existingExtraScreenshots.length === 0) {
+        console.log("Extra screenshot files don't exist on disk");
+        mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
+        return;
+      }
+      
+      mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.DEBUG_START)
+
+      // Initialize AbortController
+      this.currentExtraProcessingAbortController = new AbortController()
+      const { signal } = this.currentExtraProcessingAbortController
+
+      try {
+        // Get all screenshots (both main and extra) for processing
+        const allPaths = [
+          ...this.screenshotHelper.getScreenshotQueue(),
+          ...existingExtraScreenshots
+        ];
+        
+        const screenshots = await Promise.all(
+          allPaths.map(async (path) => {
+            try {
+              if (!fs.existsSync(path)) {
+                console.warn(`Screenshot file does not exist: ${path}`);
+                return null;
+              }
+              
+              return {
+                path,
+                preview: await this.screenshotHelper.getImagePreview(path),
+                data: fs.readFileSync(path).toString('base64')
+              };
+            } catch (err) {
+              console.error(`Error reading screenshot ${path}:`, err);
+              return null;
+            }
+          })
+        )
+        
+        // Filter out any nulls from failed screenshots
+        const validScreenshots = screenshots.filter(Boolean);
+        
+        if (validScreenshots.length === 0) {
+          throw new Error("Failed to load screenshot data for debugging");
+        }
+        
+        console.log(
+          "Combined screenshots for direct mode processing:",
+          validScreenshots.map((s) => s.path)
+        )
+
+        const result = await this.processExtraScreenshotsDirectModeHelper(
+          validScreenshots,
+          signal
+        )
+
+        if (result.success) {
+          this.deps.setHasDebugged(true)
+          mainWindow.webContents.send(
+            this.deps.PROCESSING_EVENTS.DEBUG_SUCCESS,
+            result.data
+          )
+        } else {
+          mainWindow.webContents.send(
+            this.deps.PROCESSING_EVENTS.DEBUG_ERROR,
+            result.error
+          )
+        }
+      } catch (error: any) {
+        if (axios.isCancel(error)) {
+          mainWindow.webContents.send(
+            this.deps.PROCESSING_EVENTS.DEBUG_ERROR,
+            "Extra processing was canceled by the user."
+          )
+        } else {
+          mainWindow.webContents.send(
+            this.deps.PROCESSING_EVENTS.DEBUG_ERROR,
+            error.message
+          )
+        }
+      } finally {
+        this.currentExtraProcessingAbortController = null
+      }
+    }
+  }
+
+  public async processInterviewQuestion(question: string, resumeData: string): Promise<{success: boolean, data?: string, error?: string}> {
+    try {
+      const config = configHelper.loadConfig();
+      const conversationHistory = configHelper.getConversationHistory();
+      const mainWindow = this.deps.getMainWindow();
+
+      // Create the interview prompt for generating natural, complete answers
+      const interviewPrompt = `You are an AI interview assistant helping a candidate prepare for job interviews. Your role is to generate natural, complete answers that the candidate can read verbatim during interviews.
+
+RESUME DATA:
+${resumeData}
+
+CONVERSATION HISTORY:
+${conversationHistory.map(msg => `${msg.role}: ${msg.content}`).join('\n')}
+
+CURRENT QUESTION: ${question}
+
+Generate a complete, natural-sounding answer that:
+1. Sounds like the candidate's own words and thoughts
+2. References specific experiences and skills from their resume
+3. Is conversational and authentic, not overly formal or robotic
+4. Can be read directly during an interview without sounding rehearsed
+5. Includes specific examples and quantifiable results when possible
+6. Shows enthusiasm and confidence
+7. Is concise but comprehensive (2-3 paragraphs maximum)
+
+Write the answer as if the candidate is speaking directly to the interviewer. Make it personal, authentic, and compelling. Do not provide structure or guidance - give the complete answer that can be used immediately.`;
+
+      let responseContent: string;
+      
+      if (config.apiProvider === "openai") {
+        if (!this.openaiClient) {
+          return {
+            success: false,
+            error: "OpenAI API key not configured. Please check your settings."
+          };
+        }
+        
+        const response = await this.openaiClient.chat.completions.create({
+          model: config.solutionModel || "gpt-4o",
+          messages: [
+            { role: "system", content: "You are an expert interview coach. Generate natural, complete answers that candidates can use verbatim in interviews." },
+            { role: "user", content: interviewPrompt }
+          ],
+          max_tokens: 2000,
+          temperature: 0.7
+        });
+
+        responseContent = response.choices[0].message.content || "";
+      } else if (config.apiProvider === "gemini") {
+        if (!this.geminiApiKey) {
+          return {
+            success: false,
+            error: "Gemini API key not configured. Please check your settings."
+          };
+        }
+        
+        try {
+          const geminiMessages = [
+            {
+              role: "user",
+              parts: [{ text: interviewPrompt }]
+            }
+          ];
+
+          const response = await axios.default.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel}:generateContent?key=${this.geminiApiKey}`,
+            {
+              contents: geminiMessages,
+              generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 2000
+              }
+            }
+          );
+
+          const responseData = response.data as GeminiResponse;
+          
+          if (!responseData.candidates || responseData.candidates.length === 0) {
+            throw new Error("Empty response from Gemini API");
+          }
+          
+          responseContent = responseData.candidates[0].content.parts[0].text;
+        } catch (error) {
+          console.error("Error using Gemini API for interview question:", error);
+          return {
+            success: false,
+            error: "Failed to process interview question with Gemini API. Please check your API key or try again later."
+          };
+        }
+      } else if (config.apiProvider === "anthropic") {
+        if (!this.anthropicClient) {
+          return {
+            success: false,
+            error: "Anthropic API key not configured. Please check your settings."
+          };
+        }
+        
+        try {
+          const response = await this.anthropicClient.messages.create({
+            model: config.solutionModel || "claude-3-7-sonnet-20250219",
+            max_tokens: 2000,
+            messages: [
+              {
+                role: "user",
+                content: interviewPrompt
+              }
+            ],
+            temperature: 0.7
+          });
+
+          responseContent = (response.content[0] as { type: 'text', text: string }).text;
+        } catch (error: any) {
+          console.error("Error using Anthropic API for interview question:", error);
+          return {
+            success: false,
+            error: "Failed to process interview question with Anthropic API. Please check your API key or try again later."
+          };
+        }
+      } else {
+        return {
+          success: false,
+          error: "No valid API provider configured."
+        };
+      }
+
+      return { success: true, data: responseContent };
+    } catch (error: any) {
+      console.error("Interview question processing error:", error);
+      return { 
+        success: false, 
+        error: error.message || "Failed to process interview question. Please try again." 
+      };
+    }
+  }
+
+  private async processScreenshotsDirectModeHelper(
+    screenshots: Array<{ path: string; data: string }>,
+    signal: AbortSignal
+  ): Promise<{success: boolean, data?: any, error?: string}> {
+    // This is a placeholder - the actual implementation should be similar to processScreenshotsHelper
+    // but with direct mode specific logic
+    return this.processScreenshotsHelper(screenshots, signal);
+  }
+
+  private async processExtraScreenshotsDirectModeHelper(
+    screenshots: Array<{ path: string; data: string }>,
+    signal: AbortSignal
+  ): Promise<{success: boolean, data?: any, error?: string}> {
+    // This is a placeholder - the actual implementation should be similar to processExtraScreenshotsHelper
+    // but with direct mode specific logic
+    return this.processExtraScreenshotsHelper(screenshots, signal);
+  }
 }
