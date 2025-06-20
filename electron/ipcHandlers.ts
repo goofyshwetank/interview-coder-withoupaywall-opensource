@@ -348,4 +348,83 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       return { success: false, error: "Failed to delete last screenshot" }
     }
   })
+
+  // Click-through functionality handlers
+  let clickThroughDebounceTimer: NodeJS.Timeout | null = null;
+  
+  ipcMain.handle("toggle-click-through", () => {
+    try {
+      // Clear any existing timer
+      if (clickThroughDebounceTimer) {
+        clearTimeout(clickThroughDebounceTimer);
+      }
+      
+      // Debounce the toggle to prevent rapid changes
+      clickThroughDebounceTimer = setTimeout(() => {
+        const currentSetting = configHelper.getClickThrough()
+        const newSetting = !currentSetting
+        configHelper.setClickThrough(newSetting)
+        
+        const mainWindow = deps.getMainWindow()
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.setIgnoreMouseEvents(newSetting, { forward: true })
+          mainWindow.webContents.send("click-through-changed", newSetting)
+        }
+        
+        console.log(`Click-through ${newSetting ? 'enabled' : 'disabled'}`)
+      }, 100); // 100ms debounce
+      
+      return { success: true }
+    } catch (error) {
+      console.error("Error toggling click-through:", error)
+      return { success: false, error: "Failed to toggle click-through" }
+    }
+  })
+
+  ipcMain.handle("get-click-through", () => {
+    try {
+      return { success: true, clickThrough: configHelper.getClickThrough() }
+    } catch (error) {
+      console.error("Error getting click-through setting:", error)
+      return { success: false, error: "Failed to get click-through setting" }
+    }
+  })
+
+  ipcMain.handle("set-click-through", (event, enabled: boolean) => {
+    try {
+      // Clear any existing timer
+      if (clickThroughDebounceTimer) {
+        clearTimeout(clickThroughDebounceTimer);
+      }
+      
+      // Debounce the setting to prevent rapid changes
+      clickThroughDebounceTimer = setTimeout(() => {
+        configHelper.setClickThrough(enabled)
+        
+        const mainWindow = deps.getMainWindow()
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.setIgnoreMouseEvents(enabled, { forward: true })
+          mainWindow.webContents.send("click-through-changed", enabled)
+        }
+      }, 100); // 100ms debounce
+      
+      return { success: true, clickThrough: enabled }
+    } catch (error) {
+      console.error("Error setting click-through:", error)
+      return { success: false, error: "Failed to set click-through" }
+    }
+  })
+
+  // Cleanup function to clear timers
+  const cleanup = () => {
+    if (clickThroughDebounceTimer) {
+      clearTimeout(clickThroughDebounceTimer);
+      clickThroughDebounceTimer = null;
+    }
+  };
+
+  // Register cleanup on app exit
+  process.on('exit', cleanup);
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
 }

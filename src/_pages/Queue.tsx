@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react"
+import React, { useState, useEffect, useRef, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
 import ScreenshotQueue from "../components/Queue/ScreenshotQueue"
 import QueueCommands from "../components/Queue/QueueCommands"
@@ -33,6 +33,7 @@ const Queue: React.FC<QueueProps> = ({
 
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
   const [tooltipHeight, setTooltipHeight] = useState(0)
+  const [clickThroughEnabled, setClickThroughEnabled] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
 
   const {
@@ -118,8 +119,21 @@ const Queue: React.FC<QueueProps> = ({
           "neutral"
         )
       }),
+      // Click-through status listener
+      window.electronAPI.onClickThroughChanged((enabled: boolean) => {
+        setClickThroughEnabled(enabled)
+      }),
       // Removed out of credits handler - unlimited credits in this version
     ]
+
+    // Load initial click-through state
+    window.electronAPI.getClickThrough().then((result: { success: boolean; clickThrough?: boolean }) => {
+      if (result.success) {
+        setClickThroughEnabled(result.clickThrough || false)
+      }
+    }).catch((error: unknown) => {
+      console.error("Failed to get click-through state:", error)
+    })
 
     return () => {
       resizeObserver.disconnect()
@@ -136,8 +150,38 @@ const Queue: React.FC<QueueProps> = ({
     window.electronAPI.openSettingsPortal();
   };
   
+  // Memoize the click-through indicator to prevent constant re-rendering
+  const clickThroughIndicator = useMemo(() => {
+    if (!clickThroughEnabled) return null;
+    return (
+      <div 
+        key="click-through-indicator"
+        className="absolute top-2 right-2 z-50 bg-yellow-500/80 text-black text-xs px-2 py-1 rounded-md font-medium shadow-lg"
+        style={{ 
+          position: 'absolute',
+          top: '8px',
+          right: '8px',
+          zIndex: 50,
+          backgroundColor: 'rgba(234, 179, 8, 0.8)',
+          color: 'black',
+          fontSize: '12px',
+          padding: '4px 8px',
+          borderRadius: '6px',
+          fontWeight: 500,
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+          pointerEvents: 'none'
+        }}
+      >
+        Click-through Enabled
+      </div>
+    );
+  }, [clickThroughEnabled]);
+  
   return (
-    <div ref={contentRef} className={`bg-transparent w-1/2`}>
+    <div ref={contentRef} className={`bg-transparent w-1/2 relative`}>
+      {/* Click-through indicator */}
+      {clickThroughIndicator}
+      
       <div className="px-4 py-3">
         <div className="space-y-3 w-fit">
           <ScreenshotQueue

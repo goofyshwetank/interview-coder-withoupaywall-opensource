@@ -13,6 +13,7 @@ import { Button } from "../ui/button";
 import { Settings } from "lucide-react";
 import { useToast } from "../../contexts/toast";
 
+
 type APIProvider = "openai" | "gemini" | "anthropic";
 
 type AIModel = {
@@ -184,6 +185,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   const [extractionModel, setExtractionModel] = useState("gpt-4o");
   const [solutionModel, setSolutionModel] = useState("gpt-4o");
   const [debuggingModel, setDebuggingModel] = useState("gpt-4o");
+  const [clickThrough, setClickThrough] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const { showToast } = useToast();
 
@@ -213,6 +215,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
         extractionModel?: string;
         solutionModel?: string;
         debuggingModel?: string;
+        clickThrough?: boolean;
       }
 
       window.electronAPI
@@ -223,6 +226,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           setExtractionModel(config.extractionModel || "gpt-4o");
           setSolutionModel(config.solutionModel || "gpt-4o");
           setDebuggingModel(config.debuggingModel || "gpt-4o");
+          setClickThrough(config.clickThrough || false);
         })
         .catch((error: unknown) => {
           console.error("Failed to load config:", error);
@@ -263,6 +267,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
         extractionModel,
         solutionModel,
         debuggingModel,
+        clickThrough,
       });
       
       if (result) {
@@ -457,6 +462,22 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
             </div>
           </div>
           
+          {/* Click-through Setting */}
+          <div className="space-y-2">
+            <label className="flex items-center space-x-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={clickThrough}
+                onChange={(e) => setClickThrough(e.target.checked)}
+                className="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500 focus:ring-2"
+              />
+              <div>
+                <span className="text-white font-medium">Enable Click-through</span>
+                <p className="text-gray-400 text-sm">Allow clicking through the application window to interact with content underneath</p>
+              </div>
+            </label>
+          </div>
+          
           <div className="space-y-2 mt-4">
             <label className="text-sm font-medium text-white mb-2 block">Keyboard Shortcuts</label>
             <div className="bg-black/30 border border-white/10 rounded-lg p-3">
@@ -496,6 +517,9 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                 
                 <div className="text-white/70">Zoom In</div>
                 <div className="text-white/90 font-mono">Ctrl+= / Cmd+=</div>
+                
+                <div className="text-white/70">Toggle Click-through</div>
+                <div className="text-white/90 font-mono">Ctrl+T / Cmd+T</div>
               </div>
             </div>
           </div>

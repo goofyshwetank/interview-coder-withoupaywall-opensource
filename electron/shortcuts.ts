@@ -159,6 +159,20 @@ export class ShortcutsHelper {
       }
     })
     
+    // Toggle click-through shortcut
+    globalShortcut.register("CommandOrControl+T", () => {
+      console.log("Command/Ctrl + T pressed. Toggling click-through.")
+      const mainWindow = this.deps.getMainWindow()
+      if (mainWindow) {
+        const currentSetting = configHelper.getClickThrough()
+        const newSetting = !currentSetting
+        configHelper.setClickThrough(newSetting)
+        mainWindow.setIgnoreMouseEvents(newSetting, { forward: true })
+        mainWindow.webContents.send("click-through-changed", newSetting)
+        console.log(`Click-through ${newSetting ? 'enabled' : 'disabled'}`)
+      }
+    })
+    
     // Unregister shortcuts when quitting
     app.on("will-quit", () => {
       globalShortcut.unregisterAll()

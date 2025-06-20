@@ -236,7 +236,19 @@ const electronAPI = {
       ipcRenderer.removeListener("delete-last-screenshot", subscription)
     }
   },
-  deleteLastScreenshot: () => ipcRenderer.invoke("delete-last-screenshot")
+  deleteLastScreenshot: () => ipcRenderer.invoke("delete-last-screenshot"),
+  
+  // Click-through functionality
+  toggleClickThrough: () => ipcRenderer.invoke("toggle-click-through"),
+  getClickThrough: () => ipcRenderer.invoke("get-click-through"),
+  setClickThrough: (enabled: boolean) => ipcRenderer.invoke("set-click-through", enabled),
+  onClickThroughChanged: (callback: (enabled: boolean) => void) => {
+    const subscription = (_: any, enabled: boolean) => callback(enabled)
+    ipcRenderer.on("click-through-changed", subscription)
+    return () => {
+      ipcRenderer.removeListener("click-through-changed", subscription)
+    }
+  }
 }
 
 // Before exposing the API

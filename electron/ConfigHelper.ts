@@ -13,6 +13,7 @@ interface Config {
   debuggingModel: string;
   language: string;
   opacity: number;
+  clickThrough: boolean;  // Added click-through functionality
 }
 
 export class ConfigHelper extends EventEmitter {
@@ -24,7 +25,8 @@ export class ConfigHelper extends EventEmitter {
     solutionModel: "gemini-2.0-flash",
     debuggingModel: "gemini-2.0-flash",
     language: "python",
-    opacity: 1.0
+    opacity: 1.0,
+    clickThrough: true  // Default to true to enable click-through by default
   };
 
   constructor() {
@@ -92,7 +94,34 @@ export class ConfigHelper extends EventEmitter {
     try {
       if (fs.existsSync(this.configPath)) {
         const configData = fs.readFileSync(this.configPath, 'utf8');
-        const config = JSON.parse(configData);
+        
+        // Try to parse the JSON, but handle corruption gracefully
+        let config;
+        try {
+          config = JSON.parse(configData);
+        } catch (parseError) {
+          console.error("Config file is corrupted, backing up and creating new default config:", parseError);
+          
+          // Backup the corrupted file
+          const backupPath = this.configPath + '.backup.' + Date.now();
+          try {
+            fs.copyFileSync(this.configPath, backupPath);
+            console.log(`Corrupted config backed up to: ${backupPath}`);
+          } catch (backupError) {
+            console.error("Failed to backup corrupted config:", backupError);
+          }
+          
+          // Remove the corrupted file
+          try {
+            fs.unlinkSync(this.configPath);
+          } catch (unlinkError) {
+            console.error("Failed to remove corrupted config:", unlinkError);
+          }
+          
+          // Create a new default config
+          this.saveConfig(this.defaultConfig);
+          return this.defaultConfig;
+        }
         
         // Ensure apiProvider is a valid value
         if (config.apiProvider !== "openai" && config.apiProvider !== "gemini"  && config.apiProvider !== "anthropic") {
@@ -283,6 +312,21 @@ export class ConfigHelper extends EventEmitter {
    */
   public setLanguage(language: string): void {
     this.updateConfig({ language });
+  }
+  
+  /**
+   * Get the click-through setting
+   */
+  public getClickThrough(): boolean {
+    const config = this.loadConfig();
+    return config.clickThrough !== undefined ? config.clickThrough : false;
+  }
+
+  /**
+   * Set the click-through setting
+   */
+  public setClickThrough(clickThrough: boolean): void {
+    this.updateConfig({ clickThrough });
   }
   
   /**

@@ -352,6 +352,13 @@ async function createWindow(): Promise<void> {
   const savedOpacity = configHelper.getOpacity();
   console.log(`Initial opacity from config: ${savedOpacity}`);
   
+  // Apply click-through setting from config
+  const savedClickThrough = configHelper.getClickThrough();
+  console.log(`Initial click-through from config: ${savedClickThrough}`);
+  if (savedClickThrough) {
+    state.mainWindow.setIgnoreMouseEvents(true, { forward: true });
+  }
+  
   // Always make sure window is shown first
   state.mainWindow.showInactive(); // Use showInactive for consistency
   
