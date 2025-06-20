@@ -21,9 +21,9 @@ export class ConfigHelper extends EventEmitter {
   private defaultConfig: Config = {
     apiKey: "",
     apiProvider: "gemini", // Default to Gemini
-    extractionModel: "gemini-2.0-flash", // Default to Flash for faster responses
-    solutionModel: "gemini-2.0-flash",
-    debuggingModel: "gemini-2.0-flash",
+    extractionModel: "gemini-2.5-pro-preview-06-05",
+    solutionModel: "gemini-2.5-pro-preview-06-05",
+    debuggingModel: "gemini-2.5-pro-preview-06-05",
     language: "python",
     opacity: 1.0,
     clickThrough: true  // Default to true to enable click-through by default
@@ -71,10 +71,10 @@ export class ConfigHelper extends EventEmitter {
       return model;
     } else if (provider === "gemini")  {
       // Only allow gemini-1.5-pro and gemini-2.0-flash for Gemini
-      const allowedModels = ['gemini-1.5-pro', 'gemini-2.0-flash'];
+      const allowedModels = ['gemini-2.5-pro-preview-06-05', 'gemini-1.5-pro', 'gemini-2.0-flash'];
       if (!allowedModels.includes(model)) {
-        console.warn(`Invalid Gemini model specified: ${model}. Using default model: gemini-2.0-flash`);
-        return 'gemini-2.0-flash'; // Changed default to flash
+        console.warn(`Invalid Gemini model specified: ${model}. Using default model: gemini-2.5-pro-preview-06-05`);
+        return 'gemini-2.5-pro-preview-06-05';
       }
       return model;
     }  else if (provider === "anthropic") {
@@ -208,9 +208,9 @@ export class ConfigHelper extends EventEmitter {
           updates.solutionModel = "claude-3-7-sonnet-20250219";
           updates.debuggingModel = "claude-3-7-sonnet-20250219";
         } else {
-          updates.extractionModel = "gemini-2.0-flash";
-          updates.solutionModel = "gemini-2.0-flash";
-          updates.debuggingModel = "gemini-2.0-flash";
+          updates.extractionModel = "gemini-2.5-pro-preview-06-05";
+          updates.solutionModel = "gemini-2.5-pro-preview-06-05";
+          updates.debuggingModel = "gemini-2.5-pro-preview-06-05";
         }
       }
       
