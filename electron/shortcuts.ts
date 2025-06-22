@@ -182,6 +182,15 @@ export class ShortcutsHelper {
       }
     })
     
+    // Speech recognition toggle shortcut
+    globalShortcut.register("CommandOrControl+M", () => {
+      console.log("Command/Ctrl + M pressed. Toggling speech recognition.")
+      const mainWindow = this.deps.getMainWindow()
+      if (mainWindow) {
+        mainWindow.webContents.send("toggle-speech-recognition")
+      }
+    })
+    
     // Unregister shortcuts when quitting
     app.on("will-quit", () => {
       globalShortcut.unregisterAll()

@@ -524,4 +524,194 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       return { success: false, error: "Failed to process interview question" };
     }
   })
+
+  // Speech Recognition handlers
+  let speechRecognition: any = null;
+  let isListening = false;
+
+  ipcMain.handle("start-speech-recognition", async (event) => {
+    try {
+      const mainWindow = deps.getMainWindow();
+      if (!mainWindow) {
+        return { success: false, error: "Main window not available" };
+      }
+
+      if (isListening) {
+        return { success: false, error: "Speech recognition already active" };
+      }
+
+      // Send message to renderer to start speech recognition
+      mainWindow.webContents.send("start-speech-recognition-renderer");
+      isListening = true;
+      
+      return { success: true };
+    } catch (error) {
+      console.error("Error starting speech recognition:", error);
+      return { success: false, error: "Failed to start speech recognition" };
+    }
+  });
+
+  ipcMain.handle("stop-speech-recognition", async () => {
+    try {
+      const mainWindow = deps.getMainWindow();
+      if (!mainWindow) {
+        return { success: false, error: "Main window not found" };
+      }
+
+      // Stop Web Speech API
+      mainWindow.webContents.send("stop-speech-recognition-renderer");
+      
+      // Also stop Google Speech service if it's active
+      mainWindow.webContents.send("stop-google-speech-renderer");
+
+      return { success: true };
+    } catch (error) {
+      console.error("Error stopping speech recognition:", error);
+      return { success: false, error: "Failed to stop speech recognition" };
+    }
+  });
+
+  // Handle speech results from renderer
+  ipcMain.handle("speech-result-from-renderer", async (event, data: { transcript: string, isFinal: boolean }) => {
+    try {
+      const mainWindow = deps.getMainWindow();
+      if (!mainWindow) return;
+
+      // Forward the speech result to the renderer
+      mainWindow.webContents.send("speech-result", data);
+
+      // If it's a final result, process it for interview response
+      if (data.isFinal) {
+        const resumeData = configHelper.getResumeData();
+        if (resumeData && deps.processingHelper) {
+          // Add the question to conversation history
+          configHelper.addToConversationHistory("user", data.transcript);
+          
+          // Process the question with resume context
+          const result = await deps.processingHelper.processInterviewQuestion(data.transcript, resumeData);
+          
+          if (result.success) {
+            // Add the response to conversation history
+            configHelper.addToConversationHistory("assistant", result.data);
+            
+            // Send the response back to the renderer
+            mainWindow.webContents.send("interview-response-generated", {
+              question: data.transcript,
+              answer: result.data
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error processing speech result:", error);
+    }
+  });
+
+  // Handle speech errors from renderer
+  ipcMain.handle("speech-error-from-renderer", async (event, error: string) => {
+    try {
+      const mainWindow = deps.getMainWindow();
+      if (!mainWindow) return;
+
+      isListening = false;
+      mainWindow.webContents.send("speech-error", error);
+    } catch (error) {
+      console.error("Error handling speech error:", error);
+    }
+  });
+
+  // Handle speech status from renderer
+  ipcMain.handle("speech-status-from-renderer", async (event, status: string) => {
+    try {
+      const mainWindow = deps.getMainWindow();
+      if (!mainWindow) return;
+
+      mainWindow.webContents.send("speech-status", status);
+    } catch (error) {
+      console.error("Error handling speech status:", error);
+    }
+  });
+
+  // Google Speech API handlers
+  ipcMain.handle("get-google-speech-api-key", () => {
+    try {
+      return { success: true, apiKey: configHelper.getGoogleSpeechApiKey() };
+    } catch (error) {
+      console.error("Error getting Google Speech API key:", error);
+      return { success: false, error: "Failed to get Google Speech API key" };
+    }
+  });
+
+  ipcMain.handle("set-google-speech-api-key", async (event, apiKey: string) => {
+    try {
+      if (!configHelper.isValidGoogleSpeechApiKey(apiKey)) {
+        return { success: false, error: "Invalid Google Speech API key format" };
+      }
+      
+      configHelper.setGoogleSpeechApiKey(apiKey);
+      return { success: true };
+    } catch (error) {
+      console.error("Error setting Google Speech API key:", error);
+      return { success: false, error: "Failed to set Google Speech API key" };
+    }
+  });
+
+  ipcMain.handle("get-use-google-speech", () => {
+    try {
+      return { success: true, useGoogleSpeech: configHelper.getUseGoogleSpeech() };
+    } catch (error) {
+      console.error("Error getting Google Speech setting:", error);
+      return { success: false, error: "Failed to get Google Speech setting" };
+    }
+  });
+
+  ipcMain.handle("set-use-google-speech", async (event, useGoogleSpeech: boolean) => {
+    try {
+      configHelper.setUseGoogleSpeech(useGoogleSpeech);
+      return { success: true };
+    } catch (error) {
+      console.error("Error setting Google Speech setting:", error);
+      return { success: false, error: "Failed to set Google Speech setting" };
+    }
+  });
+
+  ipcMain.handle("test-google-speech-api-key", async (event, apiKey: string) => {
+    try {
+      if (!configHelper.isValidGoogleSpeechApiKey(apiKey)) {
+        return { success: false, error: "Invalid API key format" };
+      }
+
+      // Test the API key with a simple request
+      const response = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          config: {
+            encoding: 'WEBM_OPUS',
+            sampleRateHertz: 16000,
+            languageCode: 'en-US',
+          },
+          audio: {
+            content: '' // Empty audio for testing
+          }
+        })
+      });
+
+      if (response.status === 400) {
+        // 400 is expected for empty audio, means API key is valid
+        return { success: true, message: "API key is valid" };
+      } else if (response.status === 401) {
+        return { success: false, error: "Invalid API key" };
+      } else if (response.status === 403) {
+        return { success: false, error: "API key doesn't have Speech-to-Text permissions" };
+      } else {
+        return { success: false, error: `API test failed with status: ${response.status}` };
+      }
+    } catch (error) {
+      console.error("Error testing Google Speech API key:", error);
+      return { success: false, error: "Failed to test API key" };
+    }
+  });
 }

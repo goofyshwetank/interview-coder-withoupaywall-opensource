@@ -17,6 +17,8 @@ interface Config {
   resumeData: string;  // Store resume content
   interviewMode: boolean;  // Enable interview mode
   conversationHistory: Array<{role: string, content: string, timestamp: number}>;  // Store conversation history
+  googleSpeechApiKey: string;  // Google Speech-to-Text API key
+  useGoogleSpeech: boolean;  // Enable Google Speech-to-Text
 }
 
 export class ConfigHelper extends EventEmitter {
@@ -32,7 +34,9 @@ export class ConfigHelper extends EventEmitter {
     clickThrough: true,  // Default to true to enable click-through by default
     resumeData: "",
     interviewMode: false,
-    conversationHistory: []
+    conversationHistory: [],
+    googleSpeechApiKey: "",
+    useGoogleSpeech: false
   };
 
   constructor() {
@@ -504,6 +508,44 @@ export class ConfigHelper extends EventEmitter {
    */
   public clearConversationHistory(): void {
     this.updateConfig({ conversationHistory: [] });
+  }
+
+  /**
+   * Get Google Speech API key
+   */
+  public getGoogleSpeechApiKey(): string {
+    const config = this.loadConfig();
+    return config.googleSpeechApiKey || "";
+  }
+
+  /**
+   * Set Google Speech API key
+   */
+  public setGoogleSpeechApiKey(apiKey: string): void {
+    this.updateConfig({ googleSpeechApiKey: apiKey });
+  }
+
+  /**
+   * Get Google Speech usage setting
+   */
+  public getUseGoogleSpeech(): boolean {
+    const config = this.loadConfig();
+    return config.useGoogleSpeech || false;
+  }
+
+  /**
+   * Set Google Speech usage setting
+   */
+  public setUseGoogleSpeech(useGoogleSpeech: boolean): void {
+    this.updateConfig({ useGoogleSpeech });
+  }
+
+  /**
+   * Validate Google Speech API key format
+   */
+  public isValidGoogleSpeechApiKey(apiKey: string): boolean {
+    // Google Speech API keys are typically long alphanumeric strings
+    return apiKey.trim().length >= 20 && /^[A-Za-z0-9_-]+$/.test(apiKey.trim());
   }
 }
 

@@ -265,6 +265,80 @@ const electronAPI = {
   getConversationHistory: () => ipcRenderer.invoke("get-conversation-history"),
   clearConversationHistory: () => ipcRenderer.invoke("clear-conversation-history"),
   processInterviewQuestion: (question: string) => ipcRenderer.invoke("process-interview-question", question),
+  
+  // Real-time Speech Recognition API
+  startSpeechRecognition: () => ipcRenderer.invoke("start-speech-recognition"),
+  stopSpeechRecognition: () => ipcRenderer.invoke("stop-speech-recognition"),
+  onSpeechResult: (callback: (transcript: string, isFinal: boolean) => void) => {
+    const subscription = (_: any, data: { transcript: string, isFinal: boolean }) => callback(data.transcript, data.isFinal)
+    ipcRenderer.on("speech-result", subscription)
+    return () => {
+      ipcRenderer.removeListener("speech-result", subscription)
+    }
+  },
+  onSpeechError: (callback: (error: string) => void) => {
+    const subscription = (_: any, error: string) => callback(error)
+    ipcRenderer.on("speech-error", subscription)
+    return () => {
+      ipcRenderer.removeListener("speech-error", subscription)
+    }
+  },
+  onSpeechStatus: (callback: (status: string) => void) => {
+    const subscription = (_: any, status: string) => callback(status)
+    ipcRenderer.on("speech-status", subscription)
+    return () => {
+      ipcRenderer.removeListener("speech-status", subscription)
+    }
+  },
+  onInterviewResponseGenerated: (callback: (data: { question: string, answer: string }) => void) => {
+    const subscription = (_: any, data: { question: string, answer: string }) => callback(data)
+    ipcRenderer.on("interview-response-generated", subscription)
+    return () => {
+      ipcRenderer.removeListener("interview-response-generated", subscription)
+    }
+  },
+  onToggleSpeechRecognition: (callback: () => void) => {
+    const subscription = () => callback()
+    ipcRenderer.on("toggle-speech-recognition", subscription)
+    return () => {
+      ipcRenderer.removeListener("toggle-speech-recognition", subscription)
+    }
+  },
+  // Speech recognition communication from renderer to main
+  speechResultFromRenderer: (transcript: string, isFinal: boolean) => 
+    ipcRenderer.invoke("speech-result-from-renderer", { transcript, isFinal }),
+  speechErrorFromRenderer: (error: string) => 
+    ipcRenderer.invoke("speech-error-from-renderer", error),
+  speechStatusFromRenderer: (status: string) => 
+    ipcRenderer.invoke("speech-status-from-renderer", status),
+  // Speech recognition control from main to renderer
+  onStartSpeechRecognitionRenderer: (callback: () => void) => {
+    const subscription = () => callback()
+    ipcRenderer.on("start-speech-recognition-renderer", subscription)
+    return () => {
+      ipcRenderer.removeListener("start-speech-recognition-renderer", subscription)
+    }
+  },
+  onStopSpeechRecognitionRenderer: (callback: () => void) => {
+    const subscription = () => callback()
+    ipcRenderer.on("stop-speech-recognition-renderer", subscription)
+    return () => {
+      ipcRenderer.removeListener("stop-speech-recognition-renderer", subscription)
+    }
+  },
+  onStopGoogleSpeechRenderer: (callback: () => void) => {
+    const subscription = () => callback()
+    ipcRenderer.on("stop-google-speech-renderer", subscription)
+    return () => {
+      ipcRenderer.removeListener("stop-google-speech-renderer", subscription)
+    }
+  },
+  // Google Speech API methods
+  getGoogleSpeechApiKey: () => ipcRenderer.invoke("get-google-speech-api-key"),
+  setGoogleSpeechApiKey: (apiKey: string) => ipcRenderer.invoke("set-google-speech-api-key", apiKey),
+  getUseGoogleSpeech: () => ipcRenderer.invoke("get-use-google-speech"),
+  setUseGoogleSpeech: (useGoogleSpeech: boolean) => ipcRenderer.invoke("set-use-google-speech", useGoogleSpeech),
+  testGoogleSpeechApiKey: (apiKey: string) => ipcRenderer.invoke("test-google-speech-api-key", apiKey),
 }
 
 // Before exposing the API
