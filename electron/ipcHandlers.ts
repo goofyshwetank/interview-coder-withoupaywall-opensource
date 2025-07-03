@@ -242,12 +242,17 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
         }
         return { success: false, error: "API key required" };
       }
-      
-      await deps.processingHelper?.processScreenshots()
-      return { success: true }
+
+      const cfg = configHelper.loadConfig();
+      if (cfg.apiProvider === "gemini") {
+        await deps.processingHelper?.processScreenshotsDirectMode();
+      } else {
+        await deps.processingHelper?.processScreenshots();
+      }
+      return { success: true };
     } catch (error) {
-      console.error("Error processing screenshots:", error)
-      return { error: "Failed to process screenshots" }
+      console.error("Error processing screenshots:", error);
+      return { error: "Failed to process screenshots" };
     }
   })
 
