@@ -1664,9 +1664,137 @@ Write the answer as if the candidate is speaking directly to the interviewer. Ma
     screenshots: Array<{ path: string; data: string }>,
     signal: AbortSignal
   ): Promise<{success: boolean, data?: any, error?: string}> {
-    // This is a placeholder - the actual implementation should be similar to processScreenshotsHelper
-    // but with direct mode specific logic
-    return this.processScreenshotsHelper(screenshots, signal);
+    try {
+      const config = configHelper.loadConfig();
+      const language = await this.getLanguage();
+      const mainWindow = this.deps.getMainWindow();
+
+      if (!this.geminiApiKey) {
+        return {
+          success: false,
+          error: "Gemini API key not configured. Please check your settings."
+        };
+      }
+
+      // Notify renderer that processing has started
+      if (mainWindow) {
+        mainWindow.webContents.send("processing-status", {
+          message: "Generating solution directly from screenshots...",
+          progress: 20
+        });
+      }
+
+      const imageDataList = screenshots.map(s => s.data);
+
+      const geminiMessages: GeminiMessage[] = [
+        {
+          role: "user",
+          parts: [
+            {
+              text: `You are an expert coding interview assistant. Analyze the screenshots of the coding problem and provide a complete solution in ${language}. Your response must include:\n1. Code\n2. Your Thoughts\n3. Time complexity\n4. Space complexity`
+            },
+            ...imageDataList.map(data => ({
+              inlineData: {
+                mimeType: "image/png",
+                data: data
+              }
+            }))
+          ]
+        }
+      ];
+
+      const response = await axios.default.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.5-pro-preview-06-05"}:generateContent?key=${this.geminiApiKey}`,
+        {
+          contents: geminiMessages,
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 4000
+          }
+        },
+        { signal }
+      );
+
+      const responseData = response.data as GeminiResponse;
+
+      if (!responseData.candidates || responseData.candidates.length === 0) {
+        throw new Error("Empty response from Gemini API");
+      }
+
+      const responseContent = responseData.candidates[0].content.parts[0].text;
+
+      // Parse solution content similar to generateSolutionsHelper
+      const codeMatch = responseContent.match(/```(?:\w+)?\s*([\s\S]*?)```/);
+      const code = codeMatch ? codeMatch[1].trim() : responseContent;
+
+      const thoughtsRegex = /(?:Thoughts:|Key Insights:|Reasoning:|Approach:)([\s\S]*?)(?:Time complexity:|$)/i;
+      const thoughtsMatch = responseContent.match(thoughtsRegex);
+      let thoughts: string[] = [];
+      if (thoughtsMatch && thoughtsMatch[1]) {
+        const bulletPoints = thoughtsMatch[1].match(/(?:^|\n)\s*(?:[-*•]|\d+\.)\s*(.*)/g);
+        if (bulletPoints) {
+          thoughts = bulletPoints
+            .map(point => point.replace(/^\s*(?:[-*•]|\d+\.)\s*/, '').trim())
+            .filter(Boolean);
+        } else {
+          thoughts = thoughtsMatch[1]
+            .split('\n')
+            .map(line => line.trim())
+            .filter(Boolean);
+        }
+      }
+
+      const timeComplexityPattern = /Time complexity:?\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\s*(?:Space complexity|$))/i;
+      const spaceComplexityPattern = /Space complexity:?\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\s*(?:[A-Z]|$))/i;
+
+      let timeComplexity = "O(n)";
+      let spaceComplexity = "O(n)";
+
+      const timeMatch = responseContent.match(timeComplexityPattern);
+      if (timeMatch && timeMatch[1]) {
+        timeComplexity = timeMatch[1].trim();
+        if (!timeComplexity.match(/O\([^)]+\)/i)) {
+          timeComplexity = `O(n) - ${timeComplexity}`;
+        } else if (!timeComplexity.includes('-') && !timeComplexity.includes('because')) {
+          const notationMatch = timeComplexity.match(/O\([^)]+\)/i);
+          if (notationMatch) {
+            const notation = notationMatch[0];
+            const rest = timeComplexity.replace(notation, '').trim();
+            timeComplexity = `${notation} - ${rest}`;
+          }
+        }
+      }
+
+      const spaceMatch = responseContent.match(spaceComplexityPattern);
+      if (spaceMatch && spaceMatch[1]) {
+        spaceComplexity = spaceMatch[1].trim();
+        if (!spaceComplexity.match(/O\([^)]+\)/i)) {
+          spaceComplexity = `O(n) - ${spaceComplexity}`;
+        } else if (!spaceComplexity.includes('-') && !spaceComplexity.includes('because')) {
+          const notationMatch = spaceComplexity.match(/O\([^)]+\)/i);
+          if (notationMatch) {
+            const notation = notationMatch[0];
+            const rest = spaceComplexity.replace(notation, '').trim();
+            spaceComplexity = `${notation} - ${rest}`;
+          }
+        }
+      }
+
+      const formattedResponse = {
+        code: code,
+        thoughts: thoughts.length > 0 ? thoughts : ["Solution approach based on efficiency and readability"],
+        time_complexity: timeComplexity,
+        space_complexity: spaceComplexity
+      };
+
+      return { success: true, data: formattedResponse };
+    } catch (error: any) {
+      if (axios.isCancel(error)) {
+        return { success: false, error: "Processing was canceled by the user." };
+      }
+      console.error("Direct mode processing error:", error);
+      return { success: false, error: error.message || "Failed to process screenshots" };
+    }
   }
 
   private async processExtraScreenshotsDirectModeHelper(
