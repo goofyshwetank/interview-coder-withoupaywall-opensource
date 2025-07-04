@@ -151,6 +151,8 @@ const electronAPI = {
   triggerScreenshot: () => ipcRenderer.invoke("trigger-screenshot"),
   triggerProcessScreenshots: () =>
     ipcRenderer.invoke("trigger-process-screenshots"),
+  triggerDirectMode: () =>
+    ipcRenderer.invoke("trigger-direct-mode"),
   triggerReset: () => ipcRenderer.invoke("trigger-reset"),
   triggerMoveLeft: () => ipcRenderer.invoke("trigger-move-left"),
   triggerMoveRight: () => ipcRenderer.invoke("trigger-move-right"),
@@ -339,6 +341,12 @@ const electronAPI = {
   getUseGoogleSpeech: () => ipcRenderer.invoke("get-use-google-speech"),
   setUseGoogleSpeech: (useGoogleSpeech: boolean) => ipcRenderer.invoke("set-use-google-speech", useGoogleSpeech),
   testGoogleSpeechApiKey: (apiKey: string) => ipcRenderer.invoke("test-google-speech-api-key", apiKey),
+  // Settings and configuration
+  onConfigRestored: (callback: (data: { message: string; backupPath: string }) => void) => {
+    const wrappedCallback = (_event: any, data: { message: string; backupPath: string }) => callback(data);
+    ipcRenderer.on('config-restored', wrappedCallback);
+    return () => ipcRenderer.removeListener('config-restored', wrappedCallback);
+  },
 }
 
 // Before exposing the API

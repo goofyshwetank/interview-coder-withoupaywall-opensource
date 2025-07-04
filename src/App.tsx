@@ -236,6 +236,23 @@ function App() {
     }
   }, [showToast])
 
+  useEffect(() => {
+    // Listen for config restoration events
+    const handleConfigRestored = (data: { message: string; backupPath: string }) => {
+      showToast(
+        "Configuration Restored", 
+        data.message, 
+        "error"
+      );
+    };
+
+    // Add event listener if electronAPI is available
+    if (window.electronAPI && typeof window.electronAPI.onConfigRestored === 'function') {
+      const cleanup = window.electronAPI.onConfigRestored(handleConfigRestored);
+      return cleanup;
+    }
+  }, [showToast]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>

@@ -34,6 +34,7 @@ export interface ElectronAPI {
   toggleMainWindow: () => Promise<{ success: boolean; error?: string }>
   triggerScreenshot: () => Promise<{ success: boolean; error?: string }>
   triggerProcessScreenshots: () => Promise<{ success: boolean; error?: string }>
+  triggerDirectMode: () => Promise<{ success: boolean; error?: string }>
   triggerReset: () => Promise<{ success: boolean; error?: string }>
   triggerMoveLeft: () => Promise<{ success: boolean; error?: string }>
   triggerMoveRight: () => Promise<{ success: boolean; error?: string }>
@@ -54,8 +55,8 @@ export interface ElectronAPI {
   getPlatform: () => string
   
   // New methods for OpenAI integration
-  getConfig: () => Promise<{ apiKey: string; model: string }>
-  updateConfig: (config: { apiKey?: string; model?: string }) => Promise<boolean>
+  getConfig: () => Promise<any>
+  updateConfig: (config: any) => Promise<any>
   checkApiKey: () => Promise<boolean>
   validateApiKey: (apiKey: string) => Promise<{ valid: boolean; error?: string }>
   openLink: (url: string) => void
@@ -69,6 +70,10 @@ export interface ElectronAPI {
   getClickThrough: () => Promise<{ success: boolean; enabled: boolean; error?: string }>
   setClickThrough: (enabled: boolean) => Promise<{ success: boolean; error?: string }>
   onClickThroughChanged: (callback: (enabled: boolean) => void) => () => void
+
+  // Settings and configuration
+  testApiKey: (apiKey: string, provider?: string) => Promise<{valid: boolean, error?: string}>
+  onConfigRestored: (callback: (data: { message: string; backupPath: string }) => void) => () => void
 }
 
 declare global {

@@ -26,9 +26,9 @@ export class ConfigHelper extends EventEmitter {
   private defaultConfig: Config = {
     apiKey: "",
     apiProvider: "gemini", // Default to Gemini
-    extractionModel: "gemini-2.5-pro-preview-06-05",
-    solutionModel: "gemini-2.5-pro-preview-06-05",
-    debuggingModel: "gemini-2.5-pro-preview-06-05",
+    extractionModel: "gemini-2.5-pro",
+    solutionModel: "gemini-2.5-pro",
+    debuggingModel: "gemini-2.5-pro",
     language: "python",
     opacity: 1.0,
     clickThrough: true,  // Default to true to enable click-through by default
@@ -81,10 +81,10 @@ export class ConfigHelper extends EventEmitter {
       return model;
     } else if (provider === "gemini")  {
       // Only allow gemini-1.5-pro and gemini-2.0-flash for Gemini
-      const allowedModels = ['gemini-2.5-pro-preview-06-05', 'gemini-1.5-pro', 'gemini-2.0-flash'];
+      const allowedModels = ['gemini-2.5-pro', 'gemini-1.5-pro', 'gemini-2.0-flash'];
       if (!allowedModels.includes(model)) {
-        console.warn(`Invalid Gemini model specified: ${model}. Using default model: gemini-2.5-pro-preview-06-05`);
-        return 'gemini-2.5-pro-preview-06-05';
+        console.warn(`Invalid Gemini model specified: ${model}. Using default model: gemini-2.5-pro`);
+        return 'gemini-2.5-pro';
       }
       return model;
     }  else if (provider === "anthropic") {
@@ -117,6 +117,9 @@ export class ConfigHelper extends EventEmitter {
           try {
             fs.copyFileSync(this.configPath, backupPath);
             console.log(`Corrupted config backed up to: ${backupPath}`);
+            
+            // Clean up old backup files (keep only the latest 5)
+            this.cleanupOldBackups();
           } catch (backupError) {
             console.error("Failed to backup corrupted config:", backupError);
           }
@@ -130,6 +133,13 @@ export class ConfigHelper extends EventEmitter {
           
           // Create a new default config
           this.saveConfig(this.defaultConfig);
+          
+          // Emit event to notify UI about config restoration
+          this.emit('config-restored', { 
+            message: 'Configuration file was corrupted and has been restored to defaults. Please reconfigure your settings.',
+            backupPath: backupPath
+          });
+          
           return this.defaultConfig;
         }
         
@@ -218,9 +228,9 @@ export class ConfigHelper extends EventEmitter {
           updates.solutionModel = "claude-3-7-sonnet-20250219";
           updates.debuggingModel = "claude-3-7-sonnet-20250219";
         } else {
-          updates.extractionModel = "gemini-2.5-pro-preview-06-05";
-          updates.solutionModel = "gemini-2.5-pro-preview-06-05";
-          updates.debuggingModel = "gemini-2.5-pro-preview-06-05";
+          updates.extractionModel = "gemini-2.5-pro";
+          updates.solutionModel = "gemini-2.5-pro";
+          updates.debuggingModel = "gemini-2.5-pro";
         }
       }
       
@@ -405,18 +415,44 @@ export class ConfigHelper extends EventEmitter {
    */
   private async testGeminiKey(apiKey: string): Promise<{valid: boolean, error?: string}> {
     try {
-      // For now, we'll just do a basic check to ensure the key exists and has valid format
-      // In production, you would connect to the Gemini API and validate the key
-      if (apiKey && apiKey.trim().length >= 20) {
-        // Here you would actually validate the key with a Gemini API call
+      // Actually validate the key with a Gemini API call
+      const axios = require('axios');
+      const response = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`,
+        {
+          contents: [{
+            role: "user",
+            parts: [{ text: "Hello" }]
+          }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 10
+          }
+        },
+        { timeout: 10000 }
+      );
+
+      if (response.data && response.data.candidates) {
         return { valid: true };
       }
-      return { valid: false, error: 'Invalid Gemini API key format.' };
+      return { valid: false, error: 'Invalid response from Gemini API.' };
     } catch (error: any) {
       console.error('Gemini API key test failed:', error);
       let errorMessage = 'Unknown error validating Gemini API key';
       
-      if (error.message) {
+      if (error.response?.status === 400) {
+        if (error.response.data?.error?.message?.includes('API key')) {
+          errorMessage = 'Invalid Gemini API key. Please check your key and try again.';
+        } else {
+          errorMessage = 'Invalid Gemini API key format or permissions.';
+        }
+      } else if (error.response?.status === 403) {
+        errorMessage = 'Gemini API key does not have permission to access the service.';
+      } else if (error.response?.status === 429) {
+        errorMessage = 'Gemini API rate limit exceeded. Please try again later.';
+      } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+        errorMessage = 'Network error: Unable to connect to Gemini API.';
+      } else if (error.message) {
         errorMessage = `Error: ${error.message}`;
       }
       
@@ -546,6 +582,45 @@ export class ConfigHelper extends EventEmitter {
   public isValidGoogleSpeechApiKey(apiKey: string): boolean {
     // Google Speech API keys are typically long alphanumeric strings
     return apiKey.trim().length >= 20 && /^[A-Za-z0-9_-]+$/.test(apiKey.trim());
+  }
+
+  /**
+   * Clean up old backup files
+   */
+  private cleanupOldBackups(): void {
+    try {
+      const configDir = path.dirname(this.configPath);
+      const configFileName = path.basename(this.configPath);
+      
+      // Find all backup files
+      const files = fs.readdirSync(configDir);
+      const backupFiles = files
+        .filter(file => file.startsWith(`${configFileName}.backup.`))
+        .map(file => ({
+          name: file,
+          path: path.join(configDir, file),
+          timestamp: parseInt(file.split('.backup.')[1]) || 0
+        }))
+        .sort((a, b) => b.timestamp - a.timestamp); // Sort by timestamp, newest first
+      
+      // Keep only the latest 5 backup files
+      const filesToDelete = backupFiles.slice(5);
+      
+      filesToDelete.forEach(file => {
+        try {
+          fs.unlinkSync(file.path);
+          console.log(`Cleaned up old backup file: ${file.name}`);
+        } catch (deleteError) {
+          console.error(`Failed to delete backup file ${file.name}:`, deleteError);
+        }
+      });
+      
+      if (filesToDelete.length > 0) {
+        console.log(`Cleaned up ${filesToDelete.length} old backup files`);
+      }
+    } catch (error) {
+      console.error('Error cleaning up backup files:', error);
+    }
   }
 }
 

@@ -243,16 +243,32 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
         return { success: false, error: "API key required" };
       }
 
-      const cfg = configHelper.loadConfig();
-      if (cfg.apiProvider === "gemini") {
-        await deps.processingHelper?.processScreenshotsDirectMode();
-      } else {
-        await deps.processingHelper?.processScreenshots();
-      }
+      // Always use direct mode for screenshots (code-only)
+      await deps.processingHelper?.processScreenshotsDirectMode();
       return { success: true };
     } catch (error) {
       console.error("Error processing screenshots:", error);
       return { error: "Failed to process screenshots" };
+    }
+  })
+
+  // Direct mode processing handler
+  ipcMain.handle("trigger-direct-mode", async () => {
+    try {
+      // Check for API key before processing
+      if (!configHelper.hasApiKey()) {
+        const mainWindow = deps.getMainWindow();
+        if (mainWindow) {
+          mainWindow.webContents.send(deps.PROCESSING_EVENTS.API_KEY_INVALID);
+        }
+        return { success: false, error: "API key required" };
+      }
+
+      await deps.processingHelper?.processScreenshotsDirectMode();
+      return { success: true };
+    } catch (error) {
+      console.error("Error processing screenshots in direct mode:", error);
+      return { error: "Failed to process screenshots in direct mode" };
     }
   })
 

@@ -196,6 +196,39 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             </div>
           )}
 
+          {/* Direct Mode - Instant AI Solution */}
+          {screenshotCount > 0 && (
+            <div
+              className={`flex flex-col cursor-pointer rounded px-2 py-1.5 hover:bg-green-500/20 transition-colors border border-green-500/30 ${
+                credits <= 0 ? "opacity-50 cursor-not-allowed" : ""
+              }`}
+              onClick={async () => {
+                try {
+                  const result = await window.electronAPI.triggerDirectMode()
+                  if (!result.success) {
+                    console.error("Failed to process in direct mode:", result.error)
+                    showToast("Error", "Failed to process in direct mode", "error")
+                  }
+                } catch (error) {
+                  console.error("Error in direct mode:", error)
+                  showToast("Error", "Failed to process in direct mode", "error")
+                }
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] leading-none text-green-400">Direct Mode</span>
+                <div className="flex gap-1 ml-2">
+                  <button className="bg-green-500/20 rounded-md px-1.5 py-1 text-[11px] leading-none text-green-400">
+                    {COMMAND_KEY}
+                  </button>
+                  <button className="bg-green-500/20 rounded-md px-1.5 py-1 text-[11px] leading-none text-green-400">
+                    D
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Separator */}
           <div className="mx-2 h-4 w-px bg-white/20" />
 
@@ -397,7 +430,47 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                             : "Take a screenshot first to generate a solution."}
                         </p>
                       </div>
-                      
+
+                      {/* Direct Mode Command */}
+                      <div
+                        className={`cursor-pointer rounded px-2 py-1.5 hover:bg-green-500/20 transition-colors border border-green-500/30 ${
+                          screenshotCount > 0
+                            ? ""
+                            : "opacity-50 cursor-not-allowed"
+                        }`}
+                        onClick={async () => {
+                          if (screenshotCount === 0) return
+
+                          try {
+                            const result = await window.electronAPI.triggerDirectMode()
+                            if (!result.success) {
+                              console.error("Failed to process in direct mode:", result.error)
+                              showToast("Error", "Failed to process in direct mode", "error")
+                            }
+                          } catch (error) {
+                            console.error("Error in direct mode:", error)
+                            showToast("Error", "Failed to process in direct mode", "error")
+                          }
+                        }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="truncate text-green-400">Direct Mode</span>
+                          <div className="flex gap-1 flex-shrink-0">
+                            <span className="bg-green-500/20 px-1.5 py-0.5 rounded text-[10px] leading-none text-green-400">
+                              {COMMAND_KEY}
+                            </span>
+                            <span className="bg-green-500/20 px-1.5 py-0.5 rounded text-[10px] leading-none text-green-400">
+                              D
+                            </span>
+                          </div>
+                        </div>
+                        <p className="text-[10px] leading-relaxed text-green-400/70 mt-1">
+                          {screenshotCount > 0
+                            ? "Get instant precise solution without token waste (like ChatGPT image mode)."
+                            : "Take a screenshot first for instant analysis."}
+                        </p>
+                      </div>
+
                       {/* Delete Last Screenshot Command */}
                       <div
                         className={`cursor-pointer rounded px-2 py-1.5 hover:bg-white/10 transition-colors ${

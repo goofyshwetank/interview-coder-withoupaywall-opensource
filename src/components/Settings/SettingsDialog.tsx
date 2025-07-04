@@ -51,14 +51,19 @@ const modelCategories: ModelCategory[] = [
     ],
     geminiModels: [
       {
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        description: "Best quality for complex analysis"
+      },
+      {
         id: "gemini-1.5-pro",
         name: "Gemini 1.5 Pro",
-        description: "Best overall performance for problem extraction"
+        description: "High quality with good speed"
       },
       {
         id: "gemini-2.0-flash",
         name: "Gemini 2.0 Flash",
-        description: "Faster, more cost-effective option"
+        description: "Fast processing with good quality"
       }
     ],
     anthropicModels: [
@@ -97,14 +102,19 @@ const modelCategories: ModelCategory[] = [
     ],
     geminiModels: [
       {
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        description: "Best quality for complex analysis"
+      },
+      {
         id: "gemini-1.5-pro",
         name: "Gemini 1.5 Pro",
-        description: "Strong overall performance for coding tasks"
+        description: "High quality with good speed"
       },
       {
         id: "gemini-2.0-flash",
         name: "Gemini 2.0 Flash",
-        description: "Faster, more cost-effective option"
+        description: "Fast processing with good quality"
       }
     ],
     anthropicModels: [
@@ -143,14 +153,19 @@ const modelCategories: ModelCategory[] = [
     ],
     geminiModels: [
       {
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        description: "Best quality for complex analysis"
+      },
+      {
         id: "gemini-1.5-pro",
         name: "Gemini 1.5 Pro",
-        description: "Best for analyzing code and error messages"
+        description: "High quality with good speed"
       },
       {
         id: "gemini-2.0-flash",
         name: "Gemini 2.0 Flash",
-        description: "Faster, more cost-effective option"
+        description: "Fast processing with good quality"
       }
     ],
     anthropicModels: [
@@ -181,10 +196,10 @@ interface SettingsDialogProps {
 export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDialogProps) {
   const [open, setOpen] = useState(externalOpen || false);
   const [apiKey, setApiKey] = useState("");
-  const [apiProvider, setApiProvider] = useState<APIProvider>("openai");
-  const [extractionModel, setExtractionModel] = useState("gpt-4o");
-  const [solutionModel, setSolutionModel] = useState("gpt-4o");
-  const [debuggingModel, setDebuggingModel] = useState("gpt-4o");
+  const [apiProvider, setApiProvider] = useState<APIProvider>("gemini");
+  const [extractionModel, setExtractionModel] = useState("gemini-2.5-pro");
+  const [solutionModel, setSolutionModel] = useState("gemini-2.5-pro");
+  const [debuggingModel, setDebuggingModel] = useState("gemini-2.5-pro");
   const [clickThrough, setClickThrough] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const { showToast } = useToast();
@@ -222,10 +237,10 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
         .getConfig()
         .then((config: Config) => {
           setApiKey(config.apiKey || "");
-          setApiProvider(config.apiProvider || "openai");
-          setExtractionModel(config.extractionModel || "gpt-4o");
-          setSolutionModel(config.solutionModel || "gpt-4o");
-          setDebuggingModel(config.debuggingModel || "gpt-4o");
+          setApiProvider(config.apiProvider || "gemini");
+          setExtractionModel(config.extractionModel || "gemini-2.5-pro");
+          setSolutionModel(config.solutionModel || "gemini-2.5-pro");
+          setDebuggingModel(config.debuggingModel || "gemini-2.5-pro");
           setClickThrough(config.clickThrough || false);
         })
         .catch((error: unknown) => {
@@ -248,9 +263,9 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
       setSolutionModel("gpt-4o");
       setDebuggingModel("gpt-4o");
     } else if (provider === "gemini") {
-      setExtractionModel("gemini-1.5-pro");
-      setSolutionModel("gemini-1.5-pro");
-      setDebuggingModel("gemini-1.5-pro");
+      setExtractionModel("gemini-2.5-pro");
+      setSolutionModel("gemini-2.5-pro");
+      setDebuggingModel("gemini-2.5-pro");
     } else if (provider === "anthropic") {
       setExtractionModel("claude-3-7-sonnet-20250219");
       setSolutionModel("claude-3-7-sonnet-20250219");

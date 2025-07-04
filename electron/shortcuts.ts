@@ -56,6 +56,11 @@ export class ShortcutsHelper {
       await this.deps.processingHelper?.processScreenshots()
     })
 
+    globalShortcut.register("CommandOrControl+D", async () => {
+      console.log("Command/Ctrl + D pressed. Triggering direct mode processing...")
+      await this.deps.processingHelper?.processScreenshotsDirectMode()
+    })
+
     globalShortcut.register("CommandOrControl+R", () => {
       console.log(
         "Command + R pressed. Canceling requests and resetting queues..."

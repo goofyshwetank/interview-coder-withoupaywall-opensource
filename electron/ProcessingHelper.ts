@@ -285,6 +285,19 @@ export class ProcessingHelper {
         if (validScreenshots.length === 0) {
           throw new Error("Failed to load screenshot data");
         }
+        
+        // Notify user if some screenshots failed to load
+        if (validScreenshots.length < existingScreenshots.length) {
+          const failedCount = existingScreenshots.length - validScreenshots.length;
+          console.warn(`${failedCount} screenshot(s) failed to load and will be skipped`);
+          
+          if (mainWindow) {
+            mainWindow.webContents.send("processing-status", {
+              message: `Warning: ${failedCount} screenshot(s) could not be read and will be skipped. Processing with ${validScreenshots.length} screenshot(s)...`,
+              progress: 10
+            });
+          }
+        }
 
         const result = await this.processScreenshotsHelper(validScreenshots, signal)
 
@@ -450,6 +463,47 @@ export class ProcessingHelper {
       // Step 1: Extract problem info using AI Vision API (OpenAI or Gemini)
       const imageDataList = screenshots.map(screenshot => screenshot.data);
       
+      // New extraction prompt (user-provided, with special notes)
+      const extractionPrompt = `From this screenshot of a coding problem, extract a JSON object with the following keys. For the code_template, make sure to include any surrounding class or function structure visible, not just the function signature:
+
+{
+  "problem_title": "string",
+  "description": "string",
+  "input_format": "string",
+  "expected_output": "string",
+  "constraints": "string",
+  "examples": [
+    {
+      "input": "string",
+      "output": "string",
+      "explanation": "string"
+    }
+  ],
+  "hidden_details": "string",
+  "code_template": {
+    "language": "string",
+    "signature": "string",
+    "return_type": "string",
+    "full_code_stub": "string",
+    "description": "string"
+  },
+  "goal": "string"
+}
+Special Notes:
+In code_template, extract:
+
+signature: the function signature only (e.g. char kthCharacter(...))
+
+return_type: return type of the function
+
+full_code_stub: include full visible C++ class/function stub (like class Solution { ... })
+
+description: what the function is expected to do
+
+In goal, summarize the problem in one short sentence.
+
+Format the output as a \`json ... \` block and nothing else.`;
+
       // Update the user on progress
       if (mainWindow) {
         mainWindow.webContents.send("processing-status", {
@@ -477,14 +531,14 @@ export class ProcessingHelper {
         const messages = [
           {
             role: "system" as const, 
-            content: "You are a coding challenge interpreter. Analyze the screenshot of the coding problem and extract all relevant information. Return the information in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text."
+            content: "You are a coding challenge interpreter."
           },
           {
             role: "user" as const,
             content: [
               {
-                type: "text" as const, 
-                text: `Extract the coding problem details from these screenshots. Return in JSON format. Preferred coding language we gonna use for this problem is ${language}.`
+                type: "text" as const,
+                text: extractionPrompt
               },
               ...imageDataList.map(data => ({
                 type: "image_url" as const,
@@ -530,9 +584,7 @@ export class ProcessingHelper {
             {
               role: "user",
               parts: [
-                {
-                  text: `You are a coding challenge interpreter. Analyze the screenshots of the coding problem and extract all relevant information. Return the information in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text. Preferred coding language we gonna use for this problem is ${language}.`
-                },
+                { text: extractionPrompt },
                 ...imageDataList.map(data => ({
                   inlineData: {
                     mimeType: "image/png",
@@ -543,23 +595,63 @@ export class ProcessingHelper {
             }
           ];
 
-          // Make API request to Gemini
-          const response = await axios.default.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${config.extractionModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
-            {
-              contents: geminiMessages,
-              generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 4000
+          // --- Gemini profiling start ---
+          const t0 = Date.now();
+          let response, t1;
+          try {
+            response = await axios.default.post(
+              `https://generativelanguage.googleapis.com/v1beta/models/${config.extractionModel || "gemini-2.5-pro"}:generateContent?key=${this.geminiApiKey}`,
+              {
+                contents: geminiMessages,
+                generationConfig: {
+                  temperature: 0.2,
+                  maxOutputTokens: 5000
+                }
+              },
+              { signal, timeout: 60000 }
+            );
+            t1 = Date.now();
+          } catch (err) {
+            t1 = Date.now();
+            if (t1 - t0 > 60000) {
+              if (mainWindow) {
+                mainWindow.webContents.send("processing-status", {
+                  message: "Gemini timed out – try a shorter prompt, fewer screenshots, or switch to GPT-4o.",
+                  progress: 0
+                });
               }
-            },
-            { signal }
-          );
+              return { success: false, error: "Gemini timed out after 60 seconds. Try a shorter prompt, fewer screenshots, or switch to GPT-4o." };
+            }
+            throw err;
+          }
+          const usage = response.data?.usageMetadata ?? {};
+          console.table({
+            duration_ms: Math.round(t1 - t0),
+            prompt: usage.promptTokenCount,
+            candidates: usage.candidatesTokenCount,
+            thoughts: usage.thoughtsTokenCount,
+            total: usage.totalTokenCount
+          });
+          // --- Gemini profiling end ---
 
           const responseData = response.data as GeminiResponse;
           
+          console.log("Gemini API response structure:", JSON.stringify(responseData, null, 2));
+          
           if (!responseData.candidates || responseData.candidates.length === 0) {
+            console.error("Gemini API returned empty candidates array");
             throw new Error("Empty response from Gemini API");
+          }
+          
+          if (!responseData.candidates[0].content || 
+              !responseData.candidates[0].content.parts || 
+              responseData.candidates[0].content.parts.length === 0) {
+            console.error("Gemini API response has invalid structure:", {
+              hasContent: !!responseData.candidates[0].content,
+              hasParts: !!(responseData.candidates[0].content?.parts),
+              partsLength: responseData.candidates[0].content?.parts?.length || 0
+            });
+            throw new Error("Invalid response structure from Gemini API");
           }
           
           const responseText = responseData.candidates[0].content.parts[0].text;
@@ -615,20 +707,14 @@ export class ProcessingHelper {
           problemInfo = JSON.parse(jsonText);
         } catch (error: any) {
           console.error("Error using Anthropic API:", error);
-
-          // Add specific handling for Claude's limitations
-          if (error.status === 429) {
+          
+          if (error.response?.status === 413 || error.message?.includes('too large')) {
             return {
               success: false,
-              error: "Claude API rate limit exceeded. Please wait a few minutes before trying again."
-            };
-          } else if (error.status === 413 || (error.message && error.message.includes("token"))) {
-            return {
-              success: false,
-              error: "Your screenshots contain too much information for Claude to process. Switch to OpenAI or Gemini in settings which can handle larger inputs."
+              error: "Your screenshots contain too much information for Claude to process. Try these solutions:\n\n1. Take fewer screenshots or smaller screenshots\n2. Crop screenshots to focus on the problem area\n3. Switch to OpenAI or Gemini models in Settings (they can handle larger inputs)\n4. Use text-based problem input if available"
             };
           }
-
+          
           return {
             success: false,
             error: "Failed to process with Anthropic API. Please check your API key or try again later."
@@ -725,42 +811,22 @@ export class ProcessingHelper {
         throw new Error("No problem info available");
       }
 
-      // Update progress status
-      if (mainWindow) {
-        mainWindow.webContents.send("processing-status", {
-          message: "Creating optimal solution with detailed explanations...",
-          progress: 60
-        });
-      }
+      // Compose a solution prompt using the extracted stub and details
+      const solutionPrompt = `Complete the following function/class stub to solve the problem described. Do not write a main() function or any includes. Only fill in the body of the provided stub.
 
-      // Create prompt for solution generation
-      const promptText = `
-Generate a detailed solution for the following coding problem:
+Problem:
+${problemInfo.description || problemInfo.problem_statement || ''}
 
-PROBLEM STATEMENT:
-${problemInfo.problem_statement}
+Function/Class Stub:
+${problemInfo.code_template?.full_code_stub || problemInfo.code_template?.signature || ''}
 
-CONSTRAINTS:
-${problemInfo.constraints || "No specific constraints provided."}
+Constraints:
+${problemInfo.constraints || ''}
 
-EXAMPLE INPUT:
-${problemInfo.example_input || "No example input provided."}
+Examples:
+${Array.isArray(problemInfo.examples) ? problemInfo.examples.map((e: any) => `Input: ${e.input}\nOutput: ${e.output}\nExplanation: ${e.explanation}`).join('\n\n') : ''}
 
-EXAMPLE OUTPUT:
-${problemInfo.example_output || "No example output provided."}
-
-LANGUAGE: ${language}
-
-I need the response in the following format:
-1. Code: A clean, optimized implementation in ${language}
-2. Your Thoughts: A list of key insights and reasoning behind your approach
-3. Time complexity: O(X) with a detailed explanation (at least 2 sentences)
-4. Space complexity: O(X) with a detailed explanation (at least 2 sentences)
-
-For complexity explanations, please be thorough. For example: "Time complexity: O(n) because we iterate through the array only once. This is optimal as we need to examine each element at least once to find the solution." or "Space complexity: O(n) because in the worst case, we store all elements in the hashmap. The additional space scales linearly with the input size."
-
-Your solution should be efficient, well-commented, and handle edge cases.
-`;
+Respond with only the completed code in a single code block, nothing else.`;
 
       let responseContent;
       
@@ -778,7 +844,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
           model: config.solutionModel || "gpt-4o",
           messages: [
             { role: "system", content: "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations." },
-            { role: "user", content: promptText }
+            { role: "user", content: solutionPrompt }
           ],
           max_tokens: 4000,
           temperature: 0.2
@@ -801,32 +867,141 @@ Your solution should be efficient, well-commented, and handle edge cases.
               role: "user",
               parts: [
                 {
-                  text: `You are an expert coding interview assistant. Provide a clear, optimal solution with detailed explanations for this problem:\n\n${promptText}`
+                  text: solutionPrompt
                 }
               ]
             }
           ];
 
-          // Make API request to Gemini
-          const response = await axios.default.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
-            {
-              contents: geminiMessages,
-              generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 4000
+          // --- Gemini profiling start ---
+          const t0 = Date.now();
+          let response, t1, retry = false;
+          try {
+            response = await axios.default.post(
+              `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.5-pro"}:generateContent?key=${this.geminiApiKey}`,
+              {
+                contents: geminiMessages,
+                generationConfig: {
+                  temperature: 0.2,
+                  maxOutputTokens: 5000
+                }
+              },
+              { signal, timeout: 60000 }
+            );
+            t1 = Date.now();
+          } catch (err) {
+            t1 = Date.now();
+            // Retry on ECONNRESET/socket hang up with lower maxOutputTokens
+            if (err.code === 'ECONNRESET' || (err.message && err.message.includes('socket hang up'))) {
+              retry = true;
+              try {
+                response = await axios.default.post(
+                  `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.5-pro"}:generateContent?key=${this.geminiApiKey}`,
+                  {
+                    contents: geminiMessages,
+                    generationConfig: {
+                      temperature: 0.2,
+                      maxOutputTokens: 2048
+                    }
+                  },
+                  { signal, timeout: 60000 }
+                );
+                t1 = Date.now();
+              } catch (err2) {
+                t1 = Date.now();
+                if (mainWindow) {
+                  mainWindow.webContents.send("processing-status", {
+                    message: "Gemini failed to generate a solution (network error). Try again, use a smaller prompt, or switch to GPT-4o.",
+                    progress: 0
+                  });
+                }
+                // Fallback to OpenAI if available
+                if (String(config.apiProvider) !== 'openai' && this.openaiClient) {
+                  try {
+                    const openaiMessages = [
+                      { role: "system", content: "You are an expert coding interview assistant. Provide only the code solution in a single code block, no explanation." },
+                      { role: "user", content: solutionPrompt }
+                    ] as any;
+                    const openaiResponse = await this.openaiClient.chat.completions.create({
+                      model: config.solutionModel || "gpt-4o",
+                      messages: openaiMessages,
+                      max_tokens: 2048,
+                      temperature: 0.2
+                    });
+                    responseContent = openaiResponse.choices[0].message.content;
+                    // Continue to parsing below
+                  } catch (openaiErr) {
+                    return { success: false, error: "Both Gemini and OpenAI failed to generate a solution. Please try again later." };
+                  }
+                } else {
+                  return { success: false, error: "Gemini failed to generate a solution (network error). Try again, use a smaller prompt, or switch to GPT-4o." };
+                }
               }
-            },
-            { signal }
-          );
+            } else if (t1 - t0 > 60000) {
+              if (mainWindow) {
+                mainWindow.webContents.send("processing-status", {
+                  message: "Gemini timed out – try a shorter prompt, fewer screenshots, or switch to GPT-4o.",
+                  progress: 0
+                });
+              }
+              return { success: false, error: "Gemini timed out after 60 seconds. Try a shorter prompt, fewer screenshots, or switch to GPT-4o." };
+            } else {
+              throw err;
+            }
+          }
+          if (!responseContent) {
+            const usage = response.data?.usageMetadata ?? {};
+            console.table({
+              duration_ms: Math.round(t1 - t0),
+              prompt: usage.promptTokenCount,
+              candidates: usage.candidatesTokenCount,
+              thoughts: usage.thoughtsTokenCount,
+              total: usage.totalTokenCount
+            });
+          }
+          // --- Gemini profiling end ---
 
           const responseData = response.data as GeminiResponse;
           
+          console.log("Gemini solution API response structure:", JSON.stringify(responseData, null, 2));
+          
           if (!responseData.candidates || responseData.candidates.length === 0) {
+            console.error("Gemini API returned empty candidates array for solution generation");
             throw new Error("Empty response from Gemini API");
           }
           
-          responseContent = responseData.candidates[0].content.parts[0].text;
+          const candidate = responseData.candidates[0];
+          console.log("First candidate structure:", JSON.stringify(candidate, null, 2));
+          
+          if (!candidate.content) {
+            console.error("Gemini API candidate has no content field");
+            throw new Error("Invalid response structure from Gemini API - no content");
+          }
+          
+          if (
+            (!candidate.content.parts || candidate.content.parts.length === 0) &&
+            candidate.finishReason === "MAX_TOKENS"
+          ) {
+            console.error("Gemini API hit MAX_TOKENS and returned no parts");
+            return {
+              success: false,
+              error: "Gemini could not generate a full solution due to token limits. Try reducing the number of screenshots, using a shorter prompt, or switching to a different model."
+            };
+          }
+          
+          if (!candidate.content.parts || candidate.content.parts.length === 0) {
+            console.error("Gemini API candidate content has no parts or empty parts array");
+            throw new Error("Invalid response structure from Gemini API - no parts");
+          }
+          
+          const firstPart = candidate.content.parts[0];
+          if (!firstPart.text) {
+            console.error("Gemini API first part has no text field");
+            throw new Error("Invalid response structure from Gemini API - no text in first part");
+          }
+          
+          responseContent = firstPart.text;
+          console.log("Successfully extracted response content from Gemini API");
         } catch (error) {
           console.error("Error using Gemini API for solution:", error);
           return {
@@ -850,7 +1025,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
               content: [
                 {
                   type: "text" as const,
-                  text: `You are an expert coding interview assistant. Provide a clear, optimal solution with detailed explanations for this problem:\n\n${promptText}`
+                  text: solutionPrompt
                 }
               ]
             }
@@ -890,8 +1065,22 @@ Your solution should be efficient, well-commented, and handle edge cases.
       
       // Extract parts from the response
       const codeMatch = responseContent.match(/```(?:\w+)?\s*([\s\S]*?)```/);
-      const code = codeMatch ? codeMatch[1].trim() : responseContent;
-      
+      let code = codeMatch ? codeMatch[1].trim() : "";
+
+      // If no code blocks found, try to extract from direct text
+      if (!code && (responseContent.includes('def ') || responseContent.includes('class ') || responseContent.includes('function '))) {
+        // For direct mode, if no code blocks, the entire response might be code
+        const lines = responseContent.split('\n');
+        const codeLines = lines.filter(line => 
+          !line.startsWith('**') && 
+          !line.toLowerCase().includes('complexity') &&
+          !line.toLowerCase().includes('thought')
+        );
+        if (codeLines.length > 0) {
+          code = codeLines.join('\n').trim();
+        }
+      }
+
       // Extract thoughts, looking for bullet points or numbered lists
       const thoughtsRegex = /(?:Thoughts:|Key Insights:|Reasoning:|Approach:)([\s\S]*?)(?:Time complexity:|$)/i;
       const thoughtsMatch = responseContent.match(thoughtsRegex);
@@ -1130,7 +1319,7 @@ If you include code examples, use proper markdown code blocks with language spec
           }
 
           const response = await axios.default.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${config.debuggingModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${config.debuggingModel || "gemini-2.5-pro"}:generateContent?key=${this.geminiApiKey}`,
             {
               contents: geminiMessages,
               generationConfig: {
@@ -1143,8 +1332,22 @@ If you include code examples, use proper markdown code blocks with language spec
 
           const responseData = response.data as GeminiResponse;
           
+          console.log("Gemini API response structure:", JSON.stringify(responseData, null, 2));
+          
           if (!responseData.candidates || responseData.candidates.length === 0) {
+            console.error("Gemini API returned empty candidates array");
             throw new Error("Empty response from Gemini API");
+          }
+          
+          if (!responseData.candidates[0].content || 
+              !responseData.candidates[0].content.parts || 
+              responseData.candidates[0].content.parts.length === 0) {
+            console.error("Gemini API response has invalid structure:", {
+              hasContent: !!responseData.candidates[0].content,
+              hasParts: !!(responseData.candidates[0].content?.parts),
+              partsLength: responseData.candidates[0].content?.parts?.length || 0
+            });
+            throw new Error("Invalid response structure from Gemini API");
           }
           
           debugContent = responseData.candidates[0].content.parts[0].text;
@@ -1226,16 +1429,10 @@ If you include code examples, use proper markdown code blocks with language spec
         } catch (error: any) {
           console.error("Error using Anthropic API for debugging:", error);
           
-          // Add specific handling for Claude's limitations
-          if (error.status === 429) {
+          if (error.response?.status === 413 || error.message?.includes('too large')) {
             return {
               success: false,
-              error: "Claude API rate limit exceeded. Please wait a few minutes before trying again."
-            };
-          } else if (error.status === 413 || (error.message && error.message.includes("token"))) {
-            return {
-              success: false,
-              error: "Your screenshots contain too much information for Claude to process. Switch to OpenAI or Gemini in settings which can handle larger inputs."
+              error: "Your screenshots contain too much information for Claude to process. Try these solutions:\n\n1. Take fewer screenshots or smaller screenshots\n2. Crop screenshots to focus on the problem area\n3. Switch to OpenAI or Gemini models in Settings (they can handle larger inputs)\n4. Use text-based problem input if available"
             };
           }
           
@@ -1321,11 +1518,11 @@ If you include code examples, use proper markdown code blocks with language spec
 
     const config = configHelper.loadConfig();
     
-    // Check if Gemini is configured
-    if (config.apiProvider !== "gemini" || !this.geminiApiKey) {
+    // Check if any API provider is configured
+    if (!configHelper.hasApiKey()) {
       mainWindow.webContents.send(
         this.deps.PROCESSING_EVENTS.API_KEY_INVALID,
-        "Direct mode requires Gemini API. Please configure Gemini in settings."
+        "Direct mode requires an API key. Please configure your API provider in settings."
       );
       return;
     }
@@ -1378,6 +1575,19 @@ If you include code examples, use proper markdown code blocks with language spec
         
         if (validScreenshots.length === 0) {
           throw new Error("Failed to load screenshot data");
+        }
+        
+        // Notify user if some screenshots failed to load
+        if (validScreenshots.length < existingScreenshots.length) {
+          const failedCount = existingScreenshots.length - validScreenshots.length;
+          console.warn(`${failedCount} screenshot(s) failed to load and will be skipped`);
+          
+          if (mainWindow) {
+            mainWindow.webContents.send("processing-status", {
+              message: `Warning: ${failedCount} screenshot(s) could not be read and will be skipped. Processing with ${validScreenshots.length} screenshot(s)...`,
+              progress: 10
+            });
+          }
         }
 
         const result = await this.processScreenshotsDirectModeHelper(validScreenshots, signal)
@@ -1524,6 +1734,389 @@ If you include code examples, use proper markdown code blocks with language spec
     }
   }
 
+  private async processScreenshotsDirectModeHelper(
+    screenshots: Array<{ path: string; data: string }>,
+    signal: AbortSignal
+  ): Promise<{success: boolean, data?: any, error?: string}> {
+    try {
+      const config = configHelper.loadConfig();
+      const language = await this.getLanguage();
+      const mainWindow = this.deps.getMainWindow();
+
+      // Notify renderer that processing has started
+      if (mainWindow) {
+        mainWindow.webContents.send("processing-status", {
+          message: "Generating solution directly from screenshots...",
+          progress: 20
+        });
+      }
+
+      const imageDataList = screenshots.map(s => s.data);
+
+      // Create a precise prompt for code-only output
+      const directModePrompt = `
+You are an expert coding assistant. Carefully analyze the provided screenshots and output only the most accurate, complete, and optimal solution code for the problem shown. 
+
+Respond with a single code block in ${language}. Do not include any explanation, comments, or extra text—just the code.`;
+
+      let responseContent;
+      
+      if (config.apiProvider === "openai") {
+        // OpenAI processing
+        if (!this.openaiClient) {
+          this.initializeAIClient(); // Try to reinitialize
+          if (!this.openaiClient) {
+            return {
+              success: false,
+              error: "OpenAI API key not configured or invalid. Please check your settings."
+            };
+          }
+        }
+        
+        // Send to OpenAI API  
+        const messages = [
+          { role: "system" as const, content: "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations." },
+          {
+            role: "user" as const,
+            content: [
+              {
+                type: "text" as const,
+                text: directModePrompt
+              },
+              ...imageDataList.map(data => ({
+                type: "image_url" as const,
+                image_url: { url: `data:image/png;base64,${data}` }
+              }))
+            ]
+          }
+        ];
+
+        const solutionResponse = await this.openaiClient.chat.completions.create({
+          model: config.solutionModel || "gpt-4o",
+          messages: messages,
+          max_tokens: 4000,
+          temperature: 0.1
+        });
+
+        responseContent = solutionResponse.choices[0].message.content;
+        
+      } else if (config.apiProvider === "gemini") {
+        // Gemini processing
+        if (!this.geminiApiKey) {
+          return {
+            success: false,
+            error: "Gemini API key not configured. Please check your settings."
+          };
+        }
+
+        const geminiMessages: GeminiMessage[] = [
+          {
+            role: "user",
+            parts: [
+              {
+                text: directModePrompt
+              },
+              ...imageDataList.map(data => ({
+                inlineData: {
+                  mimeType: "image/png",
+                  data: data
+                }
+              }))
+            ]
+          }
+        ];
+
+        // --- Gemini profiling start ---
+        const t0 = Date.now();
+        let response, t1, retry = false;
+        try {
+          response = await axios.default.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.5-pro"}:generateContent?key=${this.geminiApiKey}`,
+            {
+              contents: geminiMessages,
+              generationConfig: {
+                temperature: 0.2,
+                maxOutputTokens: 5000
+              }
+            },
+            { signal, timeout: 60000 }
+          );
+          t1 = Date.now();
+        } catch (err) {
+          t1 = Date.now();
+          // Retry on ECONNRESET/socket hang up with lower maxOutputTokens
+          if (err.code === 'ECONNRESET' || (err.message && err.message.includes('socket hang up'))) {
+            retry = true;
+            try {
+              response = await axios.default.post(
+                `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.5-pro"}:generateContent?key=${this.geminiApiKey}`,
+                {
+                  contents: geminiMessages,
+                  generationConfig: {
+                    temperature: 0.2,
+                    maxOutputTokens: 2048
+                  }
+                },
+                { signal, timeout: 60000 }
+              );
+              t1 = Date.now();
+            } catch (err2) {
+              t1 = Date.now();
+              if (mainWindow) {
+                mainWindow.webContents.send("processing-status", {
+                  message: "Gemini failed to generate a solution (network error). Try again, use a smaller prompt, or switch to GPT-4o.",
+                  progress: 0
+                });
+              }
+              // Fallback to OpenAI if available
+              if (String(config.apiProvider) !== 'openai' && this.openaiClient) {
+                try {
+                  const openaiMessages = [
+                    { role: "system", content: "You are an expert coding interview assistant. Provide only the code solution in a single code block, no explanation." },
+                    { role: "user", content: directModePrompt }
+                  ] as any;
+                  const openaiResponse = await this.openaiClient.chat.completions.create({
+                    model: config.solutionModel || "gpt-4o",
+                    messages: openaiMessages,
+                    max_tokens: 2048,
+                    temperature: 0.2
+                  });
+                  responseContent = openaiResponse.choices[0].message.content;
+                  // Continue to parsing below
+                } catch (openaiErr) {
+                  return { success: false, error: "Both Gemini and OpenAI failed to generate a solution. Please try again later." };
+                }
+              } else {
+                return { success: false, error: "Gemini failed to generate a solution (network error). Try again, use a smaller prompt, or switch to GPT-4o." };
+              }
+            }
+          } else if (t1 - t0 > 60000) {
+            if (mainWindow) {
+              mainWindow.webContents.send("processing-status", {
+                message: "Gemini timed out – try a shorter prompt, fewer screenshots, or switch to GPT-4o.",
+                progress: 0
+              });
+            }
+            return { success: false, error: "Gemini timed out after 60 seconds. Try a shorter prompt, fewer screenshots, or switch to GPT-4o." };
+          } else {
+            throw err;
+          }
+        }
+        if (!responseContent) {
+          const usage = response.data?.usageMetadata ?? {};
+          console.table({
+            duration_ms: Math.round(t1 - t0),
+            prompt: usage.promptTokenCount,
+            candidates: usage.candidatesTokenCount,
+            thoughts: usage.thoughtsTokenCount,
+            total: usage.totalTokenCount
+          });
+        }
+        // --- Gemini profiling end ---
+
+        const responseData = response.data as GeminiResponse;
+
+        console.log("Gemini API response structure:", JSON.stringify(responseData, null, 2));
+        
+        if (!responseData.candidates || responseData.candidates.length === 0) {
+          throw new Error("Empty response from Gemini API");
+        }
+
+        const candidate = responseData.candidates[0];
+        if (
+          (!candidate.content || !candidate.content.parts || candidate.content.parts.length === 0) &&
+          candidate.finishReason === "MAX_TOKENS"
+        ) {
+          return {
+            success: false,
+            error: "Gemini could not generate a full solution due to token limits. Try reducing the number of screenshots, a shorter prompt, or switch to a different model."
+          };
+        }
+
+        if (!candidate.content || !candidate.content.parts || candidate.content.parts.length === 0) {
+          throw new Error("Invalid response structure from Gemini API");
+        }
+        
+        responseContent = candidate.content.parts[0].text;
+      } else if (config.apiProvider === "anthropic") {
+        // Anthropic processing
+        if (!this.anthropicClient) {
+          return {
+            success: false,
+            error: "Anthropic API key not configured. Please check your settings."
+          };
+        }
+        
+        try {
+          const messages = [
+            {
+              role: "user" as const,
+              content: [
+                {
+                  type: "text" as const,
+                  text: directModePrompt
+                },
+                ...imageDataList.map(data => ({
+                  type: "image" as const,
+                  source: {
+                    type: "base64" as const,
+                    media_type: "image/png" as const,
+                    data: data
+                  }
+                }))
+              ]
+            }
+          ];
+
+          const response = await this.anthropicClient.messages.create({
+            model: config.solutionModel || "claude-3-7-sonnet-20250219",
+            max_tokens: 4000,
+            messages: messages,
+            temperature: 0.1
+          });
+
+          responseContent = (response.content[0] as { type: 'text', text: string }).text;
+        } catch (error: any) {
+          console.error("Error using Anthropic API for direct mode:", error);
+
+          // Add specific handling for Claude's limitations
+          if (error.status === 429) {
+            return {
+              success: false,
+              error: "Claude API rate limit exceeded. Please wait a few minutes before trying again."
+            };
+          } else if (error.status === 413 || (error.message && error.message.includes("token"))) {
+            return {
+              success: false,
+              error: "Your screenshots contain too much information for Claude to process. Switch to OpenAI or Gemini in settings which can handle larger inputs."
+            };
+          }
+
+          return {
+            success: false,
+            error: "Failed to process with Anthropic API. Please check your API key or try again later."
+          };
+        }
+      } else {
+        return {
+          success: false,
+          error: "No valid API provider configured."
+        };
+      }
+
+      // Improved parsing to handle the structured response
+      const codeMatch = responseContent.match(/```(?:\w+)?\s*([\s\S]*?)```/);
+      let code = codeMatch ? codeMatch[1].trim() : "";
+
+      // If no code blocks found, try to extract from direct text
+      if (!code && (responseContent.includes('def ') || responseContent.includes('class ') || responseContent.includes('function '))) {
+        // For direct mode, if no code blocks, the entire response might be code
+        const lines = responseContent.split('\n');
+        const codeLines = lines.filter(line => 
+          !line.startsWith('**') && 
+          !line.toLowerCase().includes('complexity') &&
+          !line.toLowerCase().includes('thought')
+        );
+        if (codeLines.length > 0) {
+          code = codeLines.join('\n').trim();
+        }
+      }
+
+      // Parse thoughts with better regex
+      const thoughtsRegex = /\*\*Your Thoughts:\*\*\s*([\s\S]*?)(?=\*\*Time complexity|\*\*Space complexity|$)/i;
+      const thoughtsMatch = responseContent.match(thoughtsRegex);
+      let thoughts: string[] = [];
+      
+      if (thoughtsMatch && thoughtsMatch[1]) {
+        const bulletPoints = thoughtsMatch[1].match(/(?:^|\n)\s*[-*•]\s*([^\n]+)/g);
+        if (bulletPoints) {
+          thoughts = bulletPoints
+            .map(point => point.replace(/^\s*[-*•]\s*/, '').trim())
+            .filter(Boolean);
+        } else {
+          // Fallback: split by lines and filter
+          thoughts = thoughtsMatch[1]
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line && !line.startsWith('**'))
+            .slice(0, 5); // Limit to 5 key thoughts
+        }
+      }
+
+      // Parse complexity with improved patterns
+      const timeComplexityPattern = /\*\*Time complexity:\*\*\s*([^\n]+(?:\n(?!\*\*)[^\n]+)*)/i;
+      const spaceComplexityPattern = /\*\*Space complexity:\*\*\s*([^\n]+(?:\n(?!\*\*)[^\n]+)*)/i;
+
+      let timeComplexity = "O(n)";
+      let spaceComplexity = "O(1)";
+
+      const timeMatch = responseContent.match(timeComplexityPattern);
+      if (timeMatch && timeMatch[1]) {
+        timeComplexity = timeMatch[1].trim();
+        // Ensure proper formatting
+        if (!timeComplexity.match(/O\([^)]+\)/i)) {
+          timeComplexity = `O(n) - ${timeComplexity}`;
+        } else if (!timeComplexity.includes('-') && !timeComplexity.includes('because') && !timeComplexity.includes('since')) {
+          const notationMatch = timeComplexity.match(/O\([^)]+\)/i);
+          if (notationMatch) {
+            const notation = notationMatch[0];
+            const rest = timeComplexity.replace(notation, '').trim();
+            timeComplexity = rest ? `${notation} - ${rest}` : notation;
+          }
+        }
+      }
+
+      const spaceMatch = responseContent.match(spaceComplexityPattern);
+      if (spaceMatch && spaceMatch[1]) {
+        spaceComplexity = spaceMatch[1].trim();
+        // Ensure proper formatting
+        if (!spaceComplexity.match(/O\([^)]+\)/i)) {
+          spaceComplexity = `O(1) - ${spaceComplexity}`;
+        } else if (!spaceComplexity.includes('-') && !spaceComplexity.includes('because') && !spaceComplexity.includes('since')) {
+          const notationMatch = spaceComplexity.match(/O\([^)]+\)/i);
+          if (notationMatch) {
+            const notation = notationMatch[0];
+            const rest = spaceComplexity.replace(notation, '').trim();
+            spaceComplexity = rest ? `${notation} - ${rest}` : notation;
+          }
+        }
+      }
+
+      // Ensure we have valid content
+      if (!code || code.length < 10) {
+        throw new Error("Failed to extract valid code from AI response. Please try again or use the regular solve mode.");
+      }
+
+      const formattedResponse = {
+        code: code,
+        thoughts: thoughts.length > 0 ? thoughts : [
+          "Analyzed the problem requirements from screenshots",
+          "Implemented an optimized solution with proper edge case handling",
+          "Focused on passing all visible and potential hidden test cases"
+        ],
+        time_complexity: timeComplexity,
+        space_complexity: spaceComplexity
+      };
+
+      return { success: true, data: formattedResponse };
+    } catch (error: any) {
+      if (axios.isCancel(error)) {
+        return { success: false, error: "Processing was canceled by the user." };
+      }
+      console.error("Direct mode processing error:", error);
+      return { success: false, error: error.message || "Failed to process screenshots in direct mode" };
+    }
+  }
+
+  private async processExtraScreenshotsDirectModeHelper(
+    screenshots: Array<{ path: string; data: string }>,
+    signal: AbortSignal
+  ): Promise<{success: boolean, data?: any, error?: string}> {
+    // This is a placeholder - the actual implementation should be similar to processExtraScreenshotsHelper
+    // but with direct mode specific logic
+    return this.processExtraScreenshotsHelper(screenshots, signal);
+  }
+
   public async processInterviewQuestion(question: string, resumeData: string): Promise<{success: boolean, data?: string, error?: string}> {
     try {
       const config = configHelper.loadConfig();
@@ -1606,6 +2199,12 @@ Write the answer as if the candidate is speaking directly to the interviewer. Ma
             throw new Error("Empty response from Gemini API");
           }
           
+          if (!responseData.candidates[0].content || 
+              !responseData.candidates[0].content.parts || 
+              responseData.candidates[0].content.parts.length === 0) {
+            throw new Error("Invalid response structure from Gemini API");
+          }
+          
           responseContent = responseData.candidates[0].content.parts[0].text;
         } catch (error) {
           console.error("Error using Gemini API for interview question:", error);
@@ -1658,151 +2257,5 @@ Write the answer as if the candidate is speaking directly to the interviewer. Ma
         error: error.message || "Failed to process interview question. Please try again." 
       };
     }
-  }
-
-  private async processScreenshotsDirectModeHelper(
-    screenshots: Array<{ path: string; data: string }>,
-    signal: AbortSignal
-  ): Promise<{success: boolean, data?: any, error?: string}> {
-    try {
-      const config = configHelper.loadConfig();
-      const language = await this.getLanguage();
-      const mainWindow = this.deps.getMainWindow();
-
-      if (!this.geminiApiKey) {
-        return {
-          success: false,
-          error: "Gemini API key not configured. Please check your settings."
-        };
-      }
-
-      // Notify renderer that processing has started
-      if (mainWindow) {
-        mainWindow.webContents.send("processing-status", {
-          message: "Generating solution directly from screenshots...",
-          progress: 20
-        });
-      }
-
-      const imageDataList = screenshots.map(s => s.data);
-
-      const geminiMessages: GeminiMessage[] = [
-        {
-          role: "user",
-          parts: [
-            {
-              text: `You are an expert coding interview assistant. Analyze the screenshots of the coding problem and provide a complete solution in ${language}. Your response must include:\n1. Code\n2. Your Thoughts\n3. Time complexity\n4. Space complexity`
-            },
-            ...imageDataList.map(data => ({
-              inlineData: {
-                mimeType: "image/png",
-                data: data
-              }
-            }))
-          ]
-        }
-      ];
-
-      const response = await axios.default.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.5-pro-preview-06-05"}:generateContent?key=${this.geminiApiKey}`,
-        {
-          contents: geminiMessages,
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 4000
-          }
-        },
-        { signal }
-      );
-
-      const responseData = response.data as GeminiResponse;
-
-      if (!responseData.candidates || responseData.candidates.length === 0) {
-        throw new Error("Empty response from Gemini API");
-      }
-
-      const responseContent = responseData.candidates[0].content.parts[0].text;
-
-      // Parse solution content similar to generateSolutionsHelper
-      const codeMatch = responseContent.match(/```(?:\w+)?\s*([\s\S]*?)```/);
-      const code = codeMatch ? codeMatch[1].trim() : responseContent;
-
-      const thoughtsRegex = /(?:Thoughts:|Key Insights:|Reasoning:|Approach:)([\s\S]*?)(?:Time complexity:|$)/i;
-      const thoughtsMatch = responseContent.match(thoughtsRegex);
-      let thoughts: string[] = [];
-      if (thoughtsMatch && thoughtsMatch[1]) {
-        const bulletPoints = thoughtsMatch[1].match(/(?:^|\n)\s*(?:[-*•]|\d+\.)\s*(.*)/g);
-        if (bulletPoints) {
-          thoughts = bulletPoints
-            .map(point => point.replace(/^\s*(?:[-*•]|\d+\.)\s*/, '').trim())
-            .filter(Boolean);
-        } else {
-          thoughts = thoughtsMatch[1]
-            .split('\n')
-            .map(line => line.trim())
-            .filter(Boolean);
-        }
-      }
-
-      const timeComplexityPattern = /Time complexity:?\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\s*(?:Space complexity|$))/i;
-      const spaceComplexityPattern = /Space complexity:?\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\s*(?:[A-Z]|$))/i;
-
-      let timeComplexity = "O(n)";
-      let spaceComplexity = "O(n)";
-
-      const timeMatch = responseContent.match(timeComplexityPattern);
-      if (timeMatch && timeMatch[1]) {
-        timeComplexity = timeMatch[1].trim();
-        if (!timeComplexity.match(/O\([^)]+\)/i)) {
-          timeComplexity = `O(n) - ${timeComplexity}`;
-        } else if (!timeComplexity.includes('-') && !timeComplexity.includes('because')) {
-          const notationMatch = timeComplexity.match(/O\([^)]+\)/i);
-          if (notationMatch) {
-            const notation = notationMatch[0];
-            const rest = timeComplexity.replace(notation, '').trim();
-            timeComplexity = `${notation} - ${rest}`;
-          }
-        }
-      }
-
-      const spaceMatch = responseContent.match(spaceComplexityPattern);
-      if (spaceMatch && spaceMatch[1]) {
-        spaceComplexity = spaceMatch[1].trim();
-        if (!spaceComplexity.match(/O\([^)]+\)/i)) {
-          spaceComplexity = `O(n) - ${spaceComplexity}`;
-        } else if (!spaceComplexity.includes('-') && !spaceComplexity.includes('because')) {
-          const notationMatch = spaceComplexity.match(/O\([^)]+\)/i);
-          if (notationMatch) {
-            const notation = notationMatch[0];
-            const rest = spaceComplexity.replace(notation, '').trim();
-            spaceComplexity = `${notation} - ${rest}`;
-          }
-        }
-      }
-
-      const formattedResponse = {
-        code: code,
-        thoughts: thoughts.length > 0 ? thoughts : ["Solution approach based on efficiency and readability"],
-        time_complexity: timeComplexity,
-        space_complexity: spaceComplexity
-      };
-
-      return { success: true, data: formattedResponse };
-    } catch (error: any) {
-      if (axios.isCancel(error)) {
-        return { success: false, error: "Processing was canceled by the user." };
-      }
-      console.error("Direct mode processing error:", error);
-      return { success: false, error: error.message || "Failed to process screenshots" };
-    }
-  }
-
-  private async processExtraScreenshotsDirectModeHelper(
-    screenshots: Array<{ path: string; data: string }>,
-    signal: AbortSignal
-  ): Promise<{success: boolean, data?: any, error?: string}> {
-    // This is a placeholder - the actual implementation should be similar to processExtraScreenshotsHelper
-    // but with direct mode specific logic
-    return this.processExtraScreenshotsHelper(screenshots, signal);
   }
 }

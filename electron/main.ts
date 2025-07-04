@@ -537,6 +537,13 @@ async function initializeApp() {
       console.log("No API key found in configuration. User will need to set up.")
     }
     
+    // Initialize configuration helper and listen for events
+    configHelper.on('config-restored', (data) => {
+      if (state.mainWindow && !state.mainWindow.isDestroyed()) {
+        state.mainWindow.webContents.send('config-restored', data);
+      }
+    });
+    
     initializeHelpers()
     initializeIpcHandlers({
       getMainWindow,
