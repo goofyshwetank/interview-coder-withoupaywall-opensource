@@ -56,6 +56,11 @@ const modelCategories: ModelCategory[] = [
         description: "Best quality for complex analysis"
       },
       {
+        id: "gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
+        description: "Fastest Gemini model with good quality (multimodal)"
+      },
+      {
         id: "gemini-1.5-pro",
         name: "Gemini 1.5 Pro",
         description: "High quality with good speed"
@@ -107,6 +112,11 @@ const modelCategories: ModelCategory[] = [
         description: "Best quality for complex analysis"
       },
       {
+        id: "gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
+        description: "Fastest Gemini model with good quality (multimodal)"
+      },
+      {
         id: "gemini-1.5-pro",
         name: "Gemini 1.5 Pro",
         description: "High quality with good speed"
@@ -156,6 +166,11 @@ const modelCategories: ModelCategory[] = [
         id: "gemini-2.5-pro",
         name: "Gemini 2.5 Pro",
         description: "Best quality for complex analysis"
+      },
+      {
+        id: "gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
+        description: "Fastest Gemini model with good quality (multimodal)"
       },
       {
         id: "gemini-1.5-pro",

@@ -605,7 +605,7 @@ Format the output as a \`json ... \` block and nothing else.`;
                 contents: geminiMessages,
                 generationConfig: {
                   temperature: 0.2,
-                  maxOutputTokens: 5000
+                  maxOutputTokens: 10000
                 }
               },
               { signal, timeout: 60000 }
@@ -883,7 +883,7 @@ Respond with only the completed code in a single code block, nothing else.`;
                 contents: geminiMessages,
                 generationConfig: {
                   temperature: 0.2,
-                  maxOutputTokens: 5000
+                  maxOutputTokens: 10000
                 }
               },
               { signal, timeout: 60000 }
@@ -1836,7 +1836,7 @@ Respond with a single code block in ${language}. Do not include any explanation,
               contents: geminiMessages,
               generationConfig: {
                 temperature: 0.2,
-                maxOutputTokens: 5000
+                maxOutputTokens: 10000
               }
             },
             { signal, timeout: 60000 }
