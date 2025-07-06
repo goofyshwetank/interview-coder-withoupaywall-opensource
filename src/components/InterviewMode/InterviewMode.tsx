@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useToast } from '../../contexts/toast';
 import { speechRecognitionService } from '../../services/SpeechRecognitionService';
 import { googleSpeechService } from '../../services/GoogleSpeechService';
+import { SystemAudioCapture } from '../SystemAudioCapture';
 
 interface InterviewModeProps {
   onClose: () => void;
@@ -354,7 +355,7 @@ const InterviewMode: React.FC<InterviewModeProps> = ({ onClose }) => {
 
         <div className="flex-1 flex gap-4 overflow-hidden">
           {/* Resume Section */}
-          <div className="w-1/3 flex flex-col">
+          <div className="w-1/4 flex flex-col">
             <h3 className="text-lg font-medium text-white mb-2">Resume</h3>
             <textarea
               value={resumeText}
@@ -375,6 +376,22 @@ const InterviewMode: React.FC<InterviewModeProps> = ({ onClose }) => {
                 </span>
               )}
             </div>
+          </div>
+
+          {/* System Audio Capture Section */}
+          <div className="w-1/4 flex flex-col">
+            <SystemAudioCapture 
+              onTranscript={(transcript) => {
+                // Handle transcripts from system audio
+                setCurrentTranscript(transcript);
+              }}
+              onAiResponse={(response) => {
+                // Handle AI responses
+                setAutoResponse(response);
+                // Auto-clear after 10 seconds
+                setTimeout(() => setAutoResponse(''), 10000);
+              }}
+            />
           </div>
 
           {/* Chat Section */}

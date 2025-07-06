@@ -347,6 +347,18 @@ const electronAPI = {
     ipcRenderer.on('config-restored', wrappedCallback);
     return () => ipcRenderer.removeListener('config-restored', wrappedCallback);
   },
+  
+  // System Audio Capture and AI Response methods
+  getSystemAudioStream: () => ipcRenderer.invoke("get-system-audio-stream"),
+  onAiResponse: (callback: (response: string) => void) => {
+    const subscription = (_: any, response: string) => callback(response)
+    ipcRenderer.on("ai-response", subscription)
+    return () => {
+      ipcRenderer.removeListener("ai-response", subscription)
+    }
+  },
+  aiResponseFromRenderer: (response: string) => 
+    ipcRenderer.invoke("ai-response-from-renderer", response),
 }
 
 // Before exposing the API

@@ -735,4 +735,29 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       return { success: false, error: "Failed to test API key" };
     }
   });
+
+  // System Audio Capture handlers
+  ipcMain.handle("get-system-audio-stream", async () => {
+    try {
+      // This would need to be implemented with native audio capture
+      // For now, return null to indicate system audio capture needs setup
+      return { success: false, error: "System audio capture requires platform-specific setup" };
+    } catch (error) {
+      console.error("Error getting system audio stream:", error);
+      return { success: false, error: "Failed to get system audio stream" };
+    }
+  });
+
+  // Handle AI responses from renderer
+  ipcMain.handle("ai-response-from-renderer", async (event, response: string) => {
+    try {
+      const mainWindow = deps.getMainWindow();
+      if (!mainWindow) return;
+
+      // Forward the AI response to the renderer
+      mainWindow.webContents.send("ai-response", response);
+    } catch (error) {
+      console.error("Error handling AI response:", error);
+    }
+  });
 }
