@@ -19,6 +19,7 @@ interface Config {
   conversationHistory: Array<{role: string, content: string, timestamp: number}>;  // Store conversation history
   googleSpeechApiKey: string;  // Google Speech-to-Text API key
   useGoogleSpeech: boolean;  // Enable Google Speech-to-Text
+  geminiApiKey: string;  // Gemini API key for system audio responses
 }
 
 export class ConfigHelper extends EventEmitter {
@@ -36,7 +37,8 @@ export class ConfigHelper extends EventEmitter {
     interviewMode: false,
     conversationHistory: [],
     googleSpeechApiKey: "",
-    useGoogleSpeech: false
+    useGoogleSpeech: false,
+    geminiApiKey: ""
   };
 
   constructor() {
@@ -582,6 +584,21 @@ export class ConfigHelper extends EventEmitter {
   public isValidGoogleSpeechApiKey(apiKey: string): boolean {
     // Google Speech API keys are typically long alphanumeric strings
     return apiKey.trim().length >= 20 && /^[A-Za-z0-9_-]+$/.test(apiKey.trim());
+  }
+
+  /**
+   * Get the Gemini API key for system audio responses
+   */
+  public getGeminiApiKey(): string {
+    const config = this.loadConfig();
+    return config.geminiApiKey || "";
+  }
+
+  /**
+   * Set the Gemini API key for system audio responses
+   */
+  public setGeminiApiKey(apiKey: string): void {
+    this.updateConfig({ geminiApiKey: apiKey });
   }
 
   /**
