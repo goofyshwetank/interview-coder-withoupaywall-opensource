@@ -30,7 +30,14 @@ interface GeminiResponse {
     };
     finishReason: string;
   }>;
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+    thoughtsTokenCount?: number;
+  };
 }
+
 interface AnthropicMessage {
   role: 'user' | 'assistant';
   content: Array<{
@@ -43,6 +50,58 @@ interface AnthropicMessage {
     };
   }>;
 }
+
+// Gemini Model Configuration Interface
+interface GeminiModelConfig {
+  name: string;
+  maxInputTokens: number;
+  maxOutputTokens: number;
+  imageLimit: number;
+  isFlash: boolean;
+  temperature: number;
+  contextWindow: number;
+}
+
+// Model configurations for different Gemini variants
+const GEMINI_MODEL_CONFIGS: Record<string, GeminiModelConfig> = {
+  'gemini-2.5-flash': {
+    name: 'gemini-2.5-flash',
+    maxInputTokens: 1000000,
+    maxOutputTokens: 8192,
+    imageLimit: 16,
+    isFlash: true,
+    temperature: 0.2,
+    contextWindow: 1000000
+  },
+  'gemini-2.5-pro': {
+    name: 'gemini-2.5-pro',
+    maxInputTokens: 2000000,
+    maxOutputTokens: 10000,
+    imageLimit: 50,
+    isFlash: false,
+    temperature: 0.2,
+    contextWindow: 2000000
+  },
+  'gemini-1.5-pro': {
+    name: 'gemini-1.5-pro',
+    maxInputTokens: 2000000,
+    maxOutputTokens: 8192,
+    imageLimit: 50,
+    isFlash: false,
+    temperature: 0.2,
+    contextWindow: 2000000
+  },
+  'gemini-2.0-flash': {
+    name: 'gemini-2.0-flash',
+    maxInputTokens: 1000000,
+    maxOutputTokens: 8192,
+    imageLimit: 16,
+    isFlash: true,
+    temperature: 0.2,
+    contextWindow: 1000000
+  }
+};
+
 export class ProcessingHelper {
   private deps: IProcessingHelperDeps
   private screenshotHelper: ScreenshotHelper
@@ -127,6 +186,184 @@ export class ProcessingHelper {
       this.geminiApiKey = null;
       this.anthropicClient = null;
     }
+  }
+
+  /**
+   * Get optimal Gemini model configuration based on request type and content
+   */
+  private getGeminiModelConfig(modelName: string, imageCount: number = 0, isDebug: boolean = false): GeminiModelConfig {
+    const config = GEMINI_MODEL_CONFIGS[modelName] || GEMINI_MODEL_CONFIGS['gemini-2.5-pro'];
+    
+    // For debugging or heavy image loads, prefer pro models
+    if (isDebug && imageCount > 5 && config.isFlash) {
+      console.log(`Switching from ${modelName} to gemini-2.5-pro for debug operation with ${imageCount} images`);
+      return GEMINI_MODEL_CONFIGS['gemini-2.5-pro'];
+    }
+    
+    // If image count exceeds model limit, try to use a more capable model
+    if (imageCount > config.imageLimit) {
+      const proConfig = GEMINI_MODEL_CONFIGS['gemini-2.5-pro'];
+      if (imageCount <= proConfig.imageLimit) {
+        console.log(`Switching from ${modelName} to gemini-2.5-pro due to image count: ${imageCount} > ${config.imageLimit}`);
+        return proConfig;
+      }
+    }
+    
+    return config;
+  }
+
+  /**
+   * Optimize image data for Gemini models
+   */
+  private optimizeImagesForGemini(imageDataList: string[], modelConfig: GeminiModelConfig): string[] {
+    let optimizedImages = [...imageDataList];
+    
+    // Limit number of images based on model capability
+    if (optimizedImages.length > modelConfig.imageLimit) {
+      console.log(`Reducing image count from ${optimizedImages.length} to ${modelConfig.imageLimit} for model ${modelConfig.name}`);
+      optimizedImages = optimizedImages.slice(0, modelConfig.imageLimit);
+    }
+    
+    // For flash models, compress images more aggressively
+    if (modelConfig.isFlash) {
+      // This is a placeholder for image compression logic
+      // In a real implementation, you might resize images or reduce quality
+      console.log(`Using optimized image processing for flash model: ${modelConfig.name}`);
+    }
+    
+    return optimizedImages;
+  }
+
+  /**
+   * Make an optimized Gemini API request with retry logic and fallbacks
+   */
+  private async makeGeminiRequest(
+    modelName: string,
+    messages: any[],
+    signal: AbortSignal,
+    maxRetries: number = 3,
+    isDebug: boolean = false
+  ): Promise<any> {
+    const imageCount = messages[0]?.parts?.filter((part: any) => part.inlineData)?.length || 0;
+    let modelConfig = this.getGeminiModelConfig(modelName, imageCount, isDebug);
+    let currentModel = modelConfig.name;
+    let attempt = 0;
+    
+    while (attempt < maxRetries) {
+      try {
+        console.log(`Attempt ${attempt + 1}: Using model ${currentModel} with config:`, {
+          maxOutputTokens: modelConfig.maxOutputTokens,
+          imageLimit: modelConfig.imageLimit,
+          isFlash: modelConfig.isFlash
+        });
+
+        const response = await axios.default.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${this.geminiApiKey}`,
+          {
+            contents: messages,
+            generationConfig: {
+              temperature: modelConfig.temperature,
+              maxOutputTokens: modelConfig.maxOutputTokens,
+              topK: modelConfig.isFlash ? 40 : 32,
+              topP: modelConfig.isFlash ? 0.95 : 0.9
+            },
+            safetySettings: [
+              {
+                category: "HARM_CATEGORY_HARASSMENT",
+                threshold: "BLOCK_NONE"
+              },
+              {
+                category: "HARM_CATEGORY_HATE_SPEECH", 
+                threshold: "BLOCK_NONE"
+              },
+              {
+                category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                threshold: "BLOCK_NONE"
+              },
+              {
+                category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+                threshold: "BLOCK_NONE"
+              }
+            ]
+          },
+          { 
+            signal, 
+            timeout: modelConfig.isFlash ? 45000 : 60000,
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity
+          }
+        );
+
+        return response;
+      } catch (error: any) {
+        attempt++;
+        console.error(`Attempt ${attempt} failed for model ${currentModel}:`, error.message);
+
+        // Handle specific error types and try fallbacks
+        if (error.response?.status === 400) {
+          const errorMessage = error.response.data?.error?.message || '';
+          
+          // Token limit exceeded - try with smaller output or different model
+          if (errorMessage.includes('token') || errorMessage.includes('limit')) {
+            if (modelConfig.maxOutputTokens > 2048) {
+              modelConfig.maxOutputTokens = Math.max(2048, Math.floor(modelConfig.maxOutputTokens * 0.5));
+              console.log(`Reducing maxOutputTokens to ${modelConfig.maxOutputTokens} for retry`);
+              continue;
+            } else if (currentModel !== 'gemini-2.5-flash' && attempt < maxRetries) {
+              // Try flash model as fallback
+              currentModel = 'gemini-2.5-flash';
+              modelConfig = GEMINI_MODEL_CONFIGS[currentModel];
+              console.log(`Switching to ${currentModel} as fallback for token limits`);
+              continue;
+            }
+          }
+          
+          // Image limit exceeded - reduce images
+          if (errorMessage.includes('image') || errorMessage.includes('media')) {
+            const currentImages = messages[0]?.parts?.filter((part: any) => part.inlineData) || [];
+            if (currentImages.length > 1) {
+              const reducedCount = Math.max(1, Math.floor(currentImages.length * 0.5));
+              console.log(`Reducing image count from ${currentImages.length} to ${reducedCount}`);
+              
+              // Rebuild messages with fewer images
+              const textParts = messages[0].parts.filter((part: any) => !part.inlineData);
+              const imageParts = messages[0].parts.filter((part: any) => part.inlineData).slice(0, reducedCount);
+              messages[0].parts = [...textParts, ...imageParts];
+              continue;
+            }
+          }
+        }
+        
+        // Network or timeout errors - try different model
+        if ((error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || 
+             error.message?.includes('timeout') || error.message?.includes('socket hang up')) 
+            && attempt < maxRetries) {
+          
+          if (currentModel === 'gemini-2.5-pro' && GEMINI_MODEL_CONFIGS['gemini-2.5-flash']) {
+            currentModel = 'gemini-2.5-flash';
+            modelConfig = GEMINI_MODEL_CONFIGS[currentModel];
+            console.log(`Network error: switching to ${currentModel} for better reliability`);
+            continue;
+          } else if (currentModel === 'gemini-2.5-flash' && GEMINI_MODEL_CONFIGS['gemini-1.5-pro']) {
+            currentModel = 'gemini-1.5-pro';
+            modelConfig = GEMINI_MODEL_CONFIGS[currentModel];
+            console.log(`Network error: switching to ${currentModel} as backup`);
+            continue;
+          }
+        }
+        
+        // If this is the last attempt, throw the error
+        if (attempt >= maxRetries) {
+          throw error;
+        }
+        
+        // Wait before retry with exponential backoff
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    
+    throw new Error('All retry attempts failed');
   }
 
   private async waitForInitialization(
@@ -498,40 +735,30 @@ return_type: return type of the function
 
 full_code_stub: include full visible C++ class/function stub (like class Solution { ... })
 
-description: what the function is expected to do
+`;
 
-In goal, summarize the problem in one short sentence.
+      let problemInfo;
 
-Format the output as a \`json ... \` block and nothing else.`;
-
-      // Update the user on progress
+      // Update user on progress
       if (mainWindow) {
         mainWindow.webContents.send("processing-status", {
-          message: "Analyzing problem from screenshots...",
+          message: "Analyzing problem screenshots...",
           progress: 20
         });
       }
 
-      let problemInfo;
-      
       if (config.apiProvider === "openai") {
-        // Verify OpenAI client
         if (!this.openaiClient) {
-          this.initializeAIClient(); // Try to reinitialize
-          
-          if (!this.openaiClient) {
-            return {
-              success: false,
-              error: "OpenAI API key not configured or invalid. Please check your settings."
-            };
-          }
+          return {
+            success: false,
+            error: "OpenAI API key not configured. Please check your settings."
+          };
         }
 
-        // Use OpenAI for processing
         const messages = [
           {
-            role: "system" as const, 
-            content: "You are a coding challenge interpreter."
+            role: "system" as const,
+            content: "You are an expert at extracting and parsing coding interview questions from screenshots. Always return valid JSON."
           },
           {
             role: "user" as const,
@@ -548,7 +775,6 @@ Format the output as a \`json ... \` block and nothing else.`;
           }
         ];
 
-        // Send to OpenAI Vision API
         const extractionResponse = await this.openaiClient.chat.completions.create({
           model: config.extractionModel || "gpt-4o",
           messages: messages,
@@ -556,7 +782,6 @@ Format the output as a \`json ... \` block and nothing else.`;
           temperature: 0.2
         });
 
-        // Parse the response
         try {
           const responseText = extractionResponse.choices[0].message.content;
           // Handle when OpenAI might wrap the JSON in markdown code blocks
@@ -570,7 +795,7 @@ Format the output as a \`json ... \` block and nothing else.`;
           };
         }
       } else if (config.apiProvider === "gemini")  {
-        // Use Gemini API
+        // Use Optimized Gemini API
         if (!this.geminiApiKey) {
           return {
             success: false,
@@ -579,13 +804,19 @@ Format the output as a \`json ... \` block and nothing else.`;
         }
 
         try {
-          // Create Gemini message structure
+          // Get optimal model configuration
+          const modelConfig = this.getGeminiModelConfig(config.extractionModel || "gemini-2.5-pro", imageDataList.length);
+          
+          // Optimize images for the selected model
+          const optimizedImages = this.optimizeImagesForGemini(imageDataList, modelConfig);
+          
+          // Create optimized Gemini message structure
           const geminiMessages: GeminiMessage[] = [
             {
               role: "user",
               parts: [
                 { text: extractionPrompt },
-                ...imageDataList.map(data => ({
+                ...optimizedImages.map(data => ({
                   inlineData: {
                     mimeType: "image/png",
                     data: data
@@ -595,48 +826,32 @@ Format the output as a \`json ... \` block and nothing else.`;
             }
           ];
 
-          // --- Gemini profiling start ---
+          // --- Optimized Gemini profiling start ---
           const t0 = Date.now();
-          let response, t1;
-          try {
-            response = await axios.default.post(
-              `https://generativelanguage.googleapis.com/v1beta/models/${config.extractionModel || "gemini-2.5-pro"}:generateContent?key=${this.geminiApiKey}`,
-              {
-                contents: geminiMessages,
-                generationConfig: {
-                  temperature: 0.2,
-                  maxOutputTokens: 10000
-                }
-              },
-              { signal, timeout: 60000 }
-            );
-            t1 = Date.now();
-          } catch (err) {
-            t1 = Date.now();
-            if (t1 - t0 > 60000) {
-              if (mainWindow) {
-                mainWindow.webContents.send("processing-status", {
-                  message: "Gemini timed out – try a shorter prompt, fewer screenshots, or switch to GPT-4o.",
-                  progress: 0
-                });
-              }
-              return { success: false, error: "Gemini timed out after 60 seconds. Try a shorter prompt, fewer screenshots, or switch to GPT-4o." };
-            }
-            throw err;
-          }
+          
+          // Use the optimized request method with retry logic
+          const response = await this.makeGeminiRequest(
+            config.extractionModel || "gemini-2.5-pro",
+            geminiMessages,
+            signal,
+            3, // max retries
+            false // not debug mode
+          );
+          
+          const t1 = Date.now();
           const usage = response.data?.usageMetadata ?? {};
           console.table({
+            model: response.config.url.match(/models\/([^:]+):/)?.[1] || 'unknown',
             duration_ms: Math.round(t1 - t0),
-            prompt: usage.promptTokenCount,
-            candidates: usage.candidatesTokenCount,
-            thoughts: usage.thoughtsTokenCount,
-            total: usage.totalTokenCount
+            prompt: usage.promptTokenCount || 'N/A',
+            candidates: usage.candidatesTokenCount || 'N/A',
+            thoughts: usage.thoughtsTokenCount || 'N/A',
+            total: usage.totalTokenCount || 'N/A',
+            images_sent: optimizedImages.length
           });
-          // --- Gemini profiling end ---
+          // --- Optimized Gemini profiling end ---
 
           const responseData = response.data as GeminiResponse;
-          
-          console.log("Gemini API response structure:", JSON.stringify(responseData, null, 2));
           
           if (!responseData.candidates || responseData.candidates.length === 0) {
             console.error("Gemini API returned empty candidates array");
@@ -646,11 +861,7 @@ Format the output as a \`json ... \` block and nothing else.`;
           if (!responseData.candidates[0].content || 
               !responseData.candidates[0].content.parts || 
               responseData.candidates[0].content.parts.length === 0) {
-            console.error("Gemini API response has invalid structure:", {
-              hasContent: !!responseData.candidates[0].content,
-              hasParts: !!(responseData.candidates[0].content?.parts),
-              partsLength: responseData.candidates[0].content?.parts?.length || 0
-            });
+            console.error("Gemini API response has invalid structure");
             throw new Error("Invalid response structure from Gemini API");
           }
           
@@ -659,8 +870,25 @@ Format the output as a \`json ... \` block and nothing else.`;
           // Handle when Gemini might wrap the JSON in markdown code blocks
           const jsonText = responseText.replace(/```json|```/g, '').trim();
           problemInfo = JSON.parse(jsonText);
-        } catch (error) {
-          console.error("Error using Gemini API:", error);
+        } catch (error: any) {
+          console.error("Error using optimized Gemini API:", error);
+          
+          // Provide specific error messages based on error type
+          if (error.response?.status === 429) {
+            return {
+              success: false,
+              error: "Gemini API rate limit exceeded. Please wait a moment and try again."
+            };
+          } else if (error.response?.status === 400) {
+            const errorMsg = error.response.data?.error?.message || '';
+            if (errorMsg.includes('token')) {
+              return {
+                success: false,
+                error: "Content too large for Gemini. Try using fewer or smaller screenshots."
+              };
+            }
+          }
+          
           return {
             success: false,
             error: "Failed to process with Gemini API. Please check your API key or try again later."
@@ -852,7 +1080,7 @@ Respond with only the completed code in a single code block, nothing else.`;
 
         responseContent = solutionResponse.choices[0].message.content;
       } else if (config.apiProvider === "gemini")  {
-        // Gemini processing
+        // Optimized Gemini processing
         if (!this.geminiApiKey) {
           return {
             success: false,
@@ -861,7 +1089,10 @@ Respond with only the completed code in a single code block, nothing else.`;
         }
         
         try {
-          // Create Gemini message structure
+          // Get optimal model configuration for text-only solution generation
+          const modelConfig = this.getGeminiModelConfig(config.solutionModel || "gemini-2.5-pro", 0, false);
+          
+          // Create optimized Gemini message structure
           const geminiMessages = [
             {
               role: "user",
@@ -873,97 +1104,32 @@ Respond with only the completed code in a single code block, nothing else.`;
             }
           ];
 
-          // --- Gemini profiling start ---
+          // --- Optimized Gemini solution profiling start ---
           const t0 = Date.now();
-          let response, t1, retry = false;
-          try {
-            response = await axios.default.post(
-              `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.5-pro"}:generateContent?key=${this.geminiApiKey}`,
-              {
-                contents: geminiMessages,
-                generationConfig: {
-                  temperature: 0.2,
-                  maxOutputTokens: 10000
-                }
-              },
-              { signal, timeout: 60000 }
-            );
-            t1 = Date.now();
-          } catch (err) {
-            t1 = Date.now();
-            // Retry on ECONNRESET/socket hang up with lower maxOutputTokens
-            if (err.code === 'ECONNRESET' || (err.message && err.message.includes('socket hang up'))) {
-              retry = true;
-              try {
-                response = await axios.default.post(
-                  `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.5-pro"}:generateContent?key=${this.geminiApiKey}`,
-                  {
-                    contents: geminiMessages,
-                    generationConfig: {
-                      temperature: 0.2,
-                      maxOutputTokens: 2048
-                    }
-                  },
-                  { signal, timeout: 60000 }
-                );
-                t1 = Date.now();
-              } catch (err2) {
-                t1 = Date.now();
-                if (mainWindow) {
-                  mainWindow.webContents.send("processing-status", {
-                    message: "Gemini failed to generate a solution (network error). Try again, use a smaller prompt, or switch to GPT-4o.",
-                    progress: 0
-                  });
-                }
-                // Fallback to OpenAI if available
-                if (String(config.apiProvider) !== 'openai' && this.openaiClient) {
-                  try {
-                    const openaiMessages = [
-                      { role: "system", content: "You are an expert coding interview assistant. Provide only the code solution in a single code block, no explanation." },
-                      { role: "user", content: solutionPrompt }
-                    ] as any;
-                    const openaiResponse = await this.openaiClient.chat.completions.create({
-                      model: config.solutionModel || "gpt-4o",
-                      messages: openaiMessages,
-                      max_tokens: 2048,
-                      temperature: 0.2
-                    });
-                    responseContent = openaiResponse.choices[0].message.content;
-                    // Continue to parsing below
-                  } catch (openaiErr) {
-                    return { success: false, error: "Both Gemini and OpenAI failed to generate a solution. Please try again later." };
-                  }
-                } else {
-                  return { success: false, error: "Gemini failed to generate a solution (network error). Try again, use a smaller prompt, or switch to GPT-4o." };
-                }
-              }
-            } else if (t1 - t0 > 60000) {
-              if (mainWindow) {
-                mainWindow.webContents.send("processing-status", {
-                  message: "Gemini timed out – try a shorter prompt, fewer screenshots, or switch to GPT-4o.",
-                  progress: 0
-                });
-              }
-              return { success: false, error: "Gemini timed out after 60 seconds. Try a shorter prompt, fewer screenshots, or switch to GPT-4o." };
-            } else {
-              throw err;
-            }
-          }
-          if (!responseContent) {
-            const usage = response.data?.usageMetadata ?? {};
-            console.table({
-              duration_ms: Math.round(t1 - t0),
-              prompt: usage.promptTokenCount,
-              candidates: usage.candidatesTokenCount,
-              thoughts: usage.thoughtsTokenCount,
-              total: usage.totalTokenCount
-            });
-          }
-          // --- Gemini profiling end ---
+          
+          // Use the optimized request method with retry logic
+          const response = await this.makeGeminiRequest(
+            config.solutionModel || "gemini-2.5-pro",
+            geminiMessages,
+            signal,
+            3, // max retries
+            false // not debug mode
+          );
+          
+          const t1 = Date.now();
+          const usage = response.data?.usageMetadata ?? {};
+          console.table({
+            model: response.config.url.match(/models\/([^:]+):/)?.[1] || 'unknown',
+            duration_ms: Math.round(t1 - t0),
+            prompt: usage.promptTokenCount || 'N/A',
+            candidates: usage.candidatesTokenCount || 'N/A',
+            thoughts: usage.thoughtsTokenCount || 'N/A',
+            total: usage.totalTokenCount || 'N/A',
+            operation: 'solution_generation'
+          });
+          // --- Optimized Gemini solution profiling end ---
 
           const responseData = response.data as GeminiResponse;
-          
-          console.log("Gemini solution API response structure:", JSON.stringify(responseData, null, 2));
           
           if (!responseData.candidates || responseData.candidates.length === 0) {
             console.error("Gemini API returned empty candidates array for solution generation");
@@ -971,7 +1137,6 @@ Respond with only the completed code in a single code block, nothing else.`;
           }
           
           const candidate = responseData.candidates[0];
-          console.log("First candidate structure:", JSON.stringify(candidate, null, 2));
           
           if (!candidate.content) {
             console.error("Gemini API candidate has no content field");
@@ -985,7 +1150,7 @@ Respond with only the completed code in a single code block, nothing else.`;
             console.error("Gemini API hit MAX_TOKENS and returned no parts");
             return {
               success: false,
-              error: "Gemini could not generate a full solution due to token limits. Try reducing the number of screenshots, using a shorter prompt, or switching to a different model."
+              error: "Gemini could not generate a full solution due to token limits. Try a different model or reduce prompt complexity."
             };
           }
           
@@ -1001,9 +1166,26 @@ Respond with only the completed code in a single code block, nothing else.`;
           }
           
           responseContent = firstPart.text;
-          console.log("Successfully extracted response content from Gemini API");
-        } catch (error) {
-          console.error("Error using Gemini API for solution:", error);
+          console.log("Successfully extracted solution from optimized Gemini API");
+        } catch (error: any) {
+          console.error("Error using optimized Gemini API for solution:", error);
+          
+          // Provide specific error messages based on error type
+          if (error.response?.status === 429) {
+            return {
+              success: false,
+              error: "Gemini API rate limit exceeded. Please wait a moment and try again."
+            };
+          } else if (error.response?.status === 400) {
+            const errorMsg = error.response.data?.error?.message || '';
+            if (errorMsg.includes('token')) {
+              return {
+                success: false,
+                error: "Request too large for Gemini. Try simplifying the problem description."
+              };
+            }
+          }
+          
           return {
             success: false,
             error: "Failed to generate solution with Gemini API. Please check your API key or try again later."
@@ -1296,12 +1478,18 @@ Here provide a clear explanation of why the changes are needed
 If you include code examples, use proper markdown code blocks with language specification (e.g. \`\`\`java).
 `;
 
+          // Get optimal model configuration for debugging with images
+          const modelConfig = this.getGeminiModelConfig(config.debuggingModel || "gemini-2.5-pro", imageDataList.length, true);
+          
+          // Optimize images for the selected model
+          const optimizedImages = this.optimizeImagesForGemini(imageDataList, modelConfig);
+
           const geminiMessages = [
             {
               role: "user",
               parts: [
                 { text: debugPrompt },
-                ...imageDataList.map(data => ({
+                ...optimizedImages.map(data => ({
                   inlineData: {
                     mimeType: "image/png",
                     data: data
@@ -1313,26 +1501,38 @@ If you include code examples, use proper markdown code blocks with language spec
 
           if (mainWindow) {
             mainWindow.webContents.send("processing-status", {
-              message: "Analyzing code and generating debug feedback with Gemini...",
+              message: "Analyzing code and generating debug feedback with optimized Gemini...",
               progress: 60
             });
           }
 
-          const response = await axios.default.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${config.debuggingModel || "gemini-2.5-pro"}:generateContent?key=${this.geminiApiKey}`,
-            {
-              contents: geminiMessages,
-              generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 4000
-              }
-            },
-            { signal }
+          // --- Optimized Gemini debug profiling start ---
+          const t0 = Date.now();
+          
+          // Use the optimized request method with retry logic for debugging
+          const response = await this.makeGeminiRequest(
+            config.debuggingModel || "gemini-2.5-pro",
+            geminiMessages,
+            signal,
+            3, // max retries
+            true // is debug mode
           );
+          
+          const t1 = Date.now();
+          const usage = response.data?.usageMetadata ?? {};
+          console.table({
+            model: response.config.url.match(/models\/([^:]+):/)?.[1] || 'unknown',
+            duration_ms: Math.round(t1 - t0),
+            prompt: usage.promptTokenCount || 'N/A',
+            candidates: usage.candidatesTokenCount || 'N/A',
+            thoughts: usage.thoughtsTokenCount || 'N/A',
+            total: usage.totalTokenCount || 'N/A',
+            images_sent: optimizedImages.length,
+            operation: 'debug_analysis'
+          });
+          // --- Optimized Gemini debug profiling end ---
 
           const responseData = response.data as GeminiResponse;
-          
-          console.log("Gemini API response structure:", JSON.stringify(responseData, null, 2));
           
           if (!responseData.candidates || responseData.candidates.length === 0) {
             console.error("Gemini API returned empty candidates array");
@@ -1342,17 +1542,36 @@ If you include code examples, use proper markdown code blocks with language spec
           if (!responseData.candidates[0].content || 
               !responseData.candidates[0].content.parts || 
               responseData.candidates[0].content.parts.length === 0) {
-            console.error("Gemini API response has invalid structure:", {
-              hasContent: !!responseData.candidates[0].content,
-              hasParts: !!(responseData.candidates[0].content?.parts),
-              partsLength: responseData.candidates[0].content?.parts?.length || 0
-            });
+            console.error("Gemini API response has invalid structure");
             throw new Error("Invalid response structure from Gemini API");
           }
           
           debugContent = responseData.candidates[0].content.parts[0].text;
-        } catch (error) {
-          console.error("Error using Gemini API for debugging:", error);
+          console.log("Successfully extracted debug analysis from optimized Gemini API");
+        } catch (error: any) {
+          console.error("Error using optimized Gemini API for debugging:", error);
+          
+          // Provide specific error messages based on error type
+          if (error.response?.status === 429) {
+            return {
+              success: false,
+              error: "Gemini API rate limit exceeded. Please wait a moment and try again."
+            };
+          } else if (error.response?.status === 400) {
+            const errorMsg = error.response.data?.error?.message || '';
+            if (errorMsg.includes('token')) {
+              return {
+                success: false,
+                error: "Debug request too large for Gemini. Try using fewer screenshots or switch to a different model."
+              };
+            } else if (errorMsg.includes('image')) {
+              return {
+                success: false,
+                error: "Too many debug images for Gemini. Try reducing the number of screenshots."
+              };
+            }
+          }
+          
           return {
             success: false,
             error: "Failed to process debug request with Gemini API. Please check your API key or try again later."

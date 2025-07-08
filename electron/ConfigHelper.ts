@@ -27,9 +27,9 @@ export class ConfigHelper extends EventEmitter {
   private defaultConfig: Config = {
     apiKey: "",
     apiProvider: "gemini", // Default to Gemini
-    extractionModel: "gemini-2.5-pro",
-    solutionModel: "gemini-2.5-pro",
-    debuggingModel: "gemini-2.5-pro",
+    extractionModel: "gemini-2.5-pro", // Pro for complex image analysis
+    solutionModel: "gemini-2.5-flash", // Flash for fast text generation  
+    debuggingModel: "gemini-2.5-pro", // Pro for detailed debugging
     language: "python",
     opacity: 1.0,
     clickThrough: true,  // Default to true to enable click-through by default
@@ -82,11 +82,16 @@ export class ConfigHelper extends EventEmitter {
       }
       return model;
     } else if (provider === "gemini")  {
-      // Only allow gemini-2.5-pro, gemini-2.5-flash, gemini-1.5-pro and gemini-2.0-flash for Gemini
-      const allowedModels = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash'];
+      // Allow all supported Gemini models with fallback
+      const allowedModels = [
+        'gemini-2.5-pro', 'gemini-2.5-flash', 
+        'gemini-1.5-pro', 'gemini-2.0-flash',
+        'gemini-1.5-flash', 'gemini-pro',
+        'gemini-pro-vision'
+      ];
       if (!allowedModels.includes(model)) {
-        console.warn(`Invalid Gemini model specified: ${model}. Using default model: gemini-2.5-pro`);
-        return 'gemini-2.5-pro';
+        console.warn(`Invalid Gemini model specified: ${model}. Using optimized default: gemini-2.5-flash`);
+        return 'gemini-2.5-flash'; // Use flash as default for better performance
       }
       return model;
     }  else if (provider === "anthropic") {
@@ -230,9 +235,10 @@ export class ConfigHelper extends EventEmitter {
           updates.solutionModel = "claude-3-7-sonnet-20250219";
           updates.debuggingModel = "claude-3-7-sonnet-20250219";
         } else {
-          updates.extractionModel = "gemini-2.5-pro";
-          updates.solutionModel = "gemini-2.5-pro";
-          updates.debuggingModel = "gemini-2.5-pro";
+          // Use optimized model selection for different tasks
+          updates.extractionModel = "gemini-2.5-pro"; // Pro for complex image analysis
+          updates.solutionModel = "gemini-2.5-flash"; // Flash for fast text generation
+          updates.debuggingModel = "gemini-2.5-pro"; // Pro for detailed debugging
         }
       }
       
