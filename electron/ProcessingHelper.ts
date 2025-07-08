@@ -9,6 +9,9 @@ import { OpenAI } from "openai"
 import { configHelper } from "./ConfigHelper"
 import Anthropic from '@anthropic-ai/sdk';
 
+// Enhanced debug imports
+import { PreviousSolution, DebugContext } from '../src/types/solutions';
+
 // Interface for Gemini API requests
 interface GeminiMessage {
   role: string;
@@ -112,6 +115,10 @@ export class ProcessingHelper {
   // AbortControllers for API requests
   private currentProcessingAbortController: AbortController | null = null
   private currentExtraProcessingAbortController: AbortController | null = null
+  
+  // Enhanced debug tracking
+  private previousSolutions: PreviousSolution[] = []
+  private maxStoredSolutions = 10
 
   constructor(deps: IProcessingHelperDeps) {
     this.deps = deps
@@ -124,6 +131,9 @@ export class ProcessingHelper {
     configHelper.on('config-updated', () => {
       this.initializeAIClient();
     });
+    
+    // Load previous solutions from storage
+    this.loadPreviousSolutions();
   }
   
   /**
@@ -364,6 +374,224 @@ export class ProcessingHelper {
     }
     
     throw new Error('All retry attempts failed');
+  }
+
+  /**
+   * Load previous solutions from storage
+   */
+  private loadPreviousSolutions(): void {
+    try {
+      const configPath = path.join(app.getPath('userData'), 'debug_solutions.json');
+      if (fs.existsSync(configPath)) {
+        const data = fs.readFileSync(configPath, 'utf8');
+        this.previousSolutions = JSON.parse(data);
+        console.log(`Loaded ${this.previousSolutions.length} previous solutions`);
+      }
+    } catch (error) {
+      console.warn('Failed to load previous solutions:', error);
+      this.previousSolutions = [];
+    }
+  }
+
+  /**
+   * Save previous solutions to storage
+   */
+  private savePreviousSolutions(): void {
+    try {
+      const configPath = path.join(app.getPath('userData'), 'debug_solutions.json');
+      fs.writeFileSync(configPath, JSON.stringify(this.previousSolutions, null, 2));
+    } catch (error) {
+      console.warn('Failed to save previous solutions:', error);
+    }
+  }
+
+  /**
+   * Store a solution attempt with its results
+   */
+  private storeSolutionAttempt(solution: Omit<PreviousSolution, 'id' | 'timestamp'>): void {
+    const newSolution: PreviousSolution = {
+      ...solution,
+      id: Date.now().toString(),
+      timestamp: Date.now()
+    };
+
+    this.previousSolutions.unshift(newSolution);
+    
+    // Keep only the most recent solutions
+    if (this.previousSolutions.length > this.maxStoredSolutions) {
+      this.previousSolutions = this.previousSolutions.slice(0, this.maxStoredSolutions);
+    }
+
+    this.savePreviousSolutions();
+  }
+
+  /**
+   * Get previous solutions for the same problem
+   */
+  private getPreviousSolutions(problemStatement: string, limit: number = 5): PreviousSolution[] {
+    return this.previousSolutions
+      .filter(sol => sol.problem_statement === problemStatement)
+      .slice(0, limit);
+  }
+
+  /**
+   * Analyze screenshots to extract test case failures
+   */
+  private analyzeTestCaseFailures(screenshotAnalysis: string): Array<{test_case_id: string, expected: any, actual: any, error_type: string}> {
+    const failures: Array<{test_case_id: string, expected: any, actual: any, error_type: string}> = [];
+    
+    // Parse common test failure patterns from screenshot analysis
+    const testCasePattern = /test.*case.*(\d+).*fail/gi;
+    const expectedPattern = /expected[:\s]+(.+?)[\s,\n]/gi;
+    const actualPattern = /actual[:\s]+(.+?)[\s,\n]/gi;
+    const errorPattern = /(runtime error|timeout|memory|assertion|null pointer)/gi;
+
+    let match;
+    let testCaseIndex = 0;
+
+    // Extract test case failures
+    while ((match = testCasePattern.exec(screenshotAnalysis)) !== null) {
+      const testId = match[1] || testCaseIndex.toString();
+      
+      // Find expected and actual values near this test case
+      const contextStart = Math.max(0, match.index - 200);
+      const contextEnd = Math.min(screenshotAnalysis.length, match.index + 200);
+      const context = screenshotAnalysis.slice(contextStart, contextEnd);
+      
+      const expectedMatch = expectedPattern.exec(context);
+      const actualMatch = actualPattern.exec(context);
+      const errorMatch = errorPattern.exec(context);
+      
+      const failure = {
+        test_case_id: testId,
+        expected: expectedMatch ? expectedMatch[1].trim() : 'Unknown',
+        actual: actualMatch ? actualMatch[1].trim() : 'Unknown',
+        error_type: this.categorizeError(errorMatch ? errorMatch[1] : '')
+      };
+      
+      failures.push(failure);
+      testCaseIndex++;
+    }
+
+    return failures.length > 0 ? failures : this.extractGenericFailures(screenshotAnalysis);
+  }
+
+  /**
+   * Categorize error types
+   */
+  private categorizeError(errorText: string): string {
+    const lowerError = errorText.toLowerCase();
+    if (lowerError.includes('timeout')) return 'timeout';
+    if (lowerError.includes('memory') || lowerError.includes('limit')) return 'memory';
+    if (lowerError.includes('runtime') || lowerError.includes('null') || lowerError.includes('exception')) return 'runtime';
+    return 'logic';
+  }
+
+  /**
+   * Extract generic failures when specific patterns aren't found
+   */
+  private extractGenericFailures(analysis: string): Array<{test_case_id: string, expected: any, actual: any, error_type: string}> {
+    if (analysis.toLowerCase().includes('fail') || analysis.toLowerCase().includes('error')) {
+      return [{
+        test_case_id: '1',
+        expected: 'Correct output',
+        actual: 'Incorrect output',
+        error_type: 'logic'
+      }];
+    }
+    return [];
+  }
+
+  /**
+   * Generate an enhanced debug prompt that includes previous solution context
+   */
+  private generateEnhancedDebugPrompt(
+    problemStatement: string,
+    language: string,
+    currentCode: string,
+    previousSolutions: PreviousSolution[],
+    failedTestCases: Array<{test_case_id: string, expected: any, actual: any, error_type: string}>
+  ): string {
+    const lastWorkingSolution = previousSolutions.find(s => s.success);
+    
+    let prompt = `You are a coding interview assistant helping debug and improve solutions. I need detailed help with debugging my current solution that has failing test cases.
+
+PROBLEM: "${problemStatement}"
+LANGUAGE: ${language}
+
+CURRENT CODE:
+\`\`\`${language}
+${currentCode}
+\`\`\`
+
+`;
+
+    // Add previous solution context if available
+    if (lastWorkingSolution) {
+      prompt += `PREVIOUS WORKING SOLUTION (for reference):
+\`\`\`${language}
+${lastWorkingSolution.code}
+\`\`\`
+
+`;
+    }
+
+    // Add failed test case analysis
+    if (failedTestCases.length > 0) {
+      prompt += `FAILED TEST CASES:
+${failedTestCases.map((failure, index) => 
+  `${index + 1}. Test Case ${failure.test_case_id}:
+   - Expected: ${failure.expected}
+   - Actual: ${failure.actual}
+   - Error Type: ${failure.error_type}`
+).join('\n')}
+
+`;
+    }
+
+    // Add previous attempt context
+    if (previousSolutions.length > 0) {
+      const recentFailures = previousSolutions.filter(s => !s.success).slice(0, 2);
+      if (recentFailures.length > 0) {
+        prompt += `RECENT FAILED ATTEMPTS:
+${recentFailures.map((attempt, index) => 
+  `${index + 1}. Previous attempt failed with: ${attempt.error_message || 'Unknown error'}
+   Failed test cases: ${attempt.failed_test_cases?.join(', ') || 'Not specified'}`
+).join('\n')}
+
+`;
+      }
+    }
+
+    prompt += `YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE:
+
+### Issues Identified
+- List each specific issue found in the current code compared to requirements and previous working solution
+
+### Code Comparison Analysis
+${lastWorkingSolution ? '- Compare current code with the previous working solution and highlight key differences' : '- Analyze the current code structure and logic flow'}
+
+### Specific Test Case Fixes
+- For each failed test case, provide specific fixes needed
+- Reference the exact test case numbers and expected vs actual outputs
+
+### Step-by-Step Fix Plan
+1. Numbered steps to fix the code
+2. Each step should be specific and actionable
+3. Include code snippets where helpful
+
+### Improved Solution
+\`\`\`${language}
+// Provide the corrected code here
+\`\`\`
+
+### Why This Fix Works
+- Explain how the fixes address each failed test case
+- Reference how this aligns with the previous working approach (if applicable)
+
+Focus especially on the failed test cases and provide concrete, actionable debugging advice.`;
+
+    return prompt;
   }
 
   private async waitForInitialization(
@@ -1278,7 +1506,7 @@ Respond with only the completed code in a single code block, nothing else.`;
         } else {
           // If no bullet points found, split by newlines and filter empty lines
           thoughts = thoughtsMatch[1].split('\n')
-            .map((line) => line.trim())
+            .map((line: string) => line.trim())
             .filter(Boolean);
         }
       }
@@ -1378,6 +1606,14 @@ Respond with only the completed code in a single code block, nothing else.`;
       // Prepare the images for the API call
       const imageDataList = screenshots.map(screenshot => screenshot.data);
       
+      // Generate enhanced debug context with previous solutions
+      const previousSolutions = this.getPreviousSolutions(problemInfo.problem_statement);
+      const screenshotAnalysis = `Screenshots contain ${screenshots.length} images showing code, errors, or test case failures.`;
+      const failedTestCases = this.analyzeTestCaseFailures(screenshotAnalysis);
+      
+      // Extract current code from screenshots (simplified - could be enhanced with OCR)
+      let currentCode = "// Current code being debugged (extracted from screenshots)";
+      
       let debugContent;
       
       if (config.apiProvider === "openai") {
@@ -1388,39 +1624,26 @@ Respond with only the completed code in a single code block, nothing else.`;
           };
         }
         
+        // Use enhanced debug prompt with previous solution context
+        const enhancedPrompt = this.generateEnhancedDebugPrompt(
+          problemInfo.problem_statement,
+          language,
+          currentCode,
+          previousSolutions,
+          failedTestCases
+        );
+        
         const messages = [
           {
             role: "system" as const, 
-            content: `You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help.
-
-Your response MUST follow this exact structure with these section headers (use ### for headers):
-### Issues Identified
-- List each issue as a bullet point with clear explanation
-
-### Specific Improvements and Corrections
-- List specific code changes needed as bullet points
-
-### Optimizations
-- List any performance optimizations if applicable
-
-### Explanation of Changes Needed
-Here provide a clear explanation of why the changes are needed
-
-### Key Points
-- Summary bullet points of the most important takeaways
-
-If you include code examples, use proper markdown code blocks with language specification (e.g. \`\`\`java).`
+            content: "You are an expert coding interview assistant helping debug and improve solutions. Provide detailed, actionable debugging advice with specific code improvements."
           },
           {
             role: "user" as const,
             content: [
               {
                 type: "text" as const, 
-                text: `I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution. Here are screenshots of my code, the errors or test cases. Please provide a detailed analysis with:
-1. What issues you found in my code
-2. Specific improvements and corrections
-3. Any optimizations that would make the solution better
-4. A clear explanation of the changes needed` 
+                text: enhancedPrompt
               },
               ...imageDataList.map(data => ({
                 type: "image_url" as const,
@@ -1454,29 +1677,14 @@ If you include code examples, use proper markdown code blocks with language spec
         }
         
         try {
-          const debugPrompt = `
-You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help.
-
-I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution.
-
-YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE WITH THESE SECTION HEADERS:
-### Issues Identified
-- List each issue as a bullet point with clear explanation
-
-### Specific Improvements and Corrections
-- List specific code changes needed as bullet points
-
-### Optimizations
-- List any performance optimizations if applicable
-
-### Explanation of Changes Needed
-Here provide a clear explanation of why the changes are needed
-
-### Key Points
-- Summary bullet points of the most important takeaways
-
-If you include code examples, use proper markdown code blocks with language specification (e.g. \`\`\`java).
-`;
+          // Use enhanced debug prompt with previous solution context for Gemini
+          const debugPrompt = this.generateEnhancedDebugPrompt(
+            problemInfo.problem_statement,
+            language,
+            currentCode,
+            previousSolutions,
+            failedTestCases
+          );
 
           // Get optimal model configuration for debugging with images
           const modelConfig = this.getGeminiModelConfig(config.debuggingModel || "gemini-2.5-pro", imageDataList.length, true);
@@ -1586,29 +1794,14 @@ If you include code examples, use proper markdown code blocks with language spec
         }
         
         try {
-          const debugPrompt = `
-You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help.
-
-I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution.
-
-YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE WITH THESE SECTION HEADERS:
-### Issues Identified
-- List each issue as a bullet point with clear explanation
-
-### Specific Improvements and Corrections
-- List specific code changes needed as bullet points
-
-### Optimizations
-- List any performance optimizations if applicable
-
-### Explanation of Changes Needed
-Here provide a clear explanation of why the changes are needed
-
-### Key Points
-- Summary bullet points of the most important takeaways
-
-If you include code examples, use proper markdown code blocks with language specification.
-`;
+          // Use enhanced debug prompt with previous solution context for Anthropic
+          const debugPrompt = this.generateEnhancedDebugPrompt(
+            problemInfo.problem_statement,
+            language,
+            currentCode,
+            previousSolutions,
+            failedTestCases
+          );
 
           const messages = [
             {
@@ -1688,7 +1881,7 @@ If you include code examples, use proper markdown code blocks with language spec
 
       const bulletPoints = formattedDebugContent.match(/(?:^|\n)[ ]*(?:[-*•]|\d+\.)[ ]+([^\n]+)/g);
       const thoughts = bulletPoints 
-        ? bulletPoints.map(point => point.replace(/^[ ]*(?:[-*•]|\d+\.)[ ]+/, '').trim()).slice(0, 5)
+        ? bulletPoints.map((point: string) => point.replace(/^[ ]*(?:[-*•]|\d+\.)[ ]+/, '').trim()).slice(0, 5)
         : ["Debug analysis based on your screenshots"];
       
       const response = {
@@ -1698,6 +1891,18 @@ If you include code examples, use proper markdown code blocks with language spec
         time_complexity: "N/A - Debug mode",
         space_complexity: "N/A - Debug mode"
       };
+
+      // Store this debug attempt for future reference
+      if (extractedCode && extractedCode !== "// Debug mode - see analysis below") {
+        this.storeSolutionAttempt({
+          code: extractedCode,
+          success: false, // Debug attempts are typically for failed solutions
+          failed_test_cases: failedTestCases.map(f => f.test_case_id),
+          error_message: "Debug session - improving previous solution",
+          language: language,
+          problem_statement: problemInfo.problem_statement
+        });
+      }
 
       return { success: true, data: response };
     } catch (error: any) {

@@ -103,6 +103,8 @@ const Debug: React.FC<DebugProps> = ({
     null
   )
   const [debugAnalysis, setDebugAnalysis] = useState<string | null>(null)
+  const [previousSolutionRef, setPreviousSolutionRef] = useState<string | null>(null)
+  const [testCaseFailures, setTestCaseFailures] = useState<Array<{test_case_id: string, expected: any, actual: any}> | null>(null)
 
   const queryClient = useQueryClient()
   const contentRef = useRef<HTMLDivElement>(null)
@@ -448,6 +450,47 @@ const Debug: React.FC<DebugProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Previous Solution Reference Section */}
+            {previousSolutionRef && (
+              <div className="space-y-2">
+                <h2 className="text-[13px] font-medium text-white tracking-wide">Previous Working Solution</h2>
+                <div className="w-full bg-green-900/20 rounded-md p-4 text-[13px] leading-[1.4] text-gray-100 border border-green-500/30">
+                  <div className="flex items-start gap-2 mb-2">
+                    <div className="w-1.5 h-1.5 rounded-full bg-green-400/80 mt-2 shrink-0" />
+                    <div className="text-green-200 font-medium">Reference Solution Found</div>
+                  </div>
+                  <div className="text-gray-300">
+                    {previousSolutionRef}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Test Case Failures Section */}
+            {testCaseFailures && testCaseFailures.length > 0 && (
+              <div className="space-y-2">
+                <h2 className="text-[13px] font-medium text-white tracking-wide">Failed Test Cases</h2>
+                <div className="space-y-2">
+                  {testCaseFailures.map((failure, index) => (
+                    <div key={index} className="w-full bg-red-900/20 rounded-md p-4 text-[13px] leading-[1.4] text-gray-100 border border-red-500/30">
+                      <div className="flex items-start gap-2 mb-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-red-400/80 mt-2 shrink-0" />
+                        <div className="text-red-200 font-medium">Test Case {failure.test_case_id}</div>
+                      </div>
+                      <div className="ml-4 space-y-1">
+                        <div className="text-gray-300">
+                          <span className="text-red-300 font-medium">Expected:</span> {failure.expected}
+                        </div>
+                        <div className="text-gray-300">
+                          <span className="text-red-300 font-medium">Actual:</span> {failure.actual}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Complexity Section */}
             <ComplexitySection
